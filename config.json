@@ -1,0 +1,53 @@
+{
+  "selection": {
+    "stock": {
+      "top_n": 10,
+      "min_market_cap": 5e9,
+      "min_amount": 5e7,
+      "scan_count": 200
+    },
+    "etf": {
+      "top_n": 10,
+      "min_aum": 5e8,
+      "min_amount": 5e7,
+      "premium_tolerance": 0.01
+    },
+    "concurrency": 4
+  },
+  "models": {
+    "active_selection_model": "multi_factor_v1",
+    "stock_weights": {
+      "momentum": 0.30,
+      "quality": 0.25,
+      "value": 0.25,
+      "fund_flow": 0.20
+    },
+    "etf_weights": {
+      "scale": 0.15,
+      "liquidity": 0.20,
+      "premium": 0.15,
+      "momentum": 0.30,
+      "tracking_error": 0.20
+    }
+  },
+  "risk": {
+    "max_position_pct": 0.12,
+    "stop_loss_pct": 0.08,
+    "max_drawdown_pct": 0.20,
+    "max_correlation": 0.7,
+    "total_candidates": 20
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080
+  },
+  "data": {
+    "sqlite_path": "data/quantpick.db",
+    "cache_days": 1
+  },
+  "network": {
+    "timeouts": {
+      "akshare": 15
+    }
+  }
+}
