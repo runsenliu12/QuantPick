@@ -5,20 +5,24 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>QuantPick · 股+ETF 智能精选</title>
 <style>
-  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2329; --muted:#8a9099; --line:#e6e8eb; --accent:#2b6de4; --red:#e23b3b; --green:#1aa260; }
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2329; --muted:#8a9099; --line:#e6e8eb; --accent:#2b6de4; --red:#e23b3b; --green:#1aa260; --warn:#e08a00; }
   * { box-sizing: border-box; }
   body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--ink); }
   header { background:var(--card); border-bottom:1px solid var(--line); padding:16px 24px; display:flex; align-items:center; justify-content:space-between; }
   header h1 { font-size:18px; margin:0; }
-  header .meta { color:var(--muted); font-size:13px; }
-  .wrap { max-width:1100px; margin:20px auto; padding:0 16px; }
+  header .meta { color:var(--muted); font-size:13px; display:flex; gap:10px; align-items:center; }
+  .badge { padding:2px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .badge.on { background:#e6f6ee; color:var(--green); }
+  .badge.off { background:#fdecec; color:var(--red); }
+  .wrap { max-width:1200px; margin:20px auto; padding:0 16px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:18px; }
   .card h2 { font-size:15px; margin:0 0 12px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2), th:nth-child(3), td:nth-child(3) { text-align:left; }
   th { color:var(--muted); font-weight:600; }
   .pos { color:var(--red); } .neg { color:var(--green); }
+  .attr { color:var(--muted); font-size:12px; text-align:left; }
   .btn { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
   .btn:hover { border-color:var(--accent); color:var(--accent); }
   .note { color:var(--muted); font-size:12px; margin-top:8px; }
@@ -28,6 +32,7 @@
 <header>
   <h1>📊 QuantPick · 股 + ETF 智能精选</h1>
   <div class="meta">
+    <span id="regime" class="badge on">市场: --</span>
     <span id="ts">加载中…</span>
     <button class="btn" onclick="load(true)">刷新</button>
   </div>
@@ -37,19 +42,34 @@
   <div class="card">
     <h2>🥇 股票精选 Top</h2>
     <table id="tbl-stock"><thead></thead><tbody></tbody></table>
-    <div class="note">分数为多因子 Z-Score 加权，仓位为风控建议上限，非买卖指令。</div>
+    <div class="note">分数为多因子 Z-Score 加权；仓位为风控建议上限（已按市场状态缩放）；因子贡献列展示主要拉动项。非买卖指令。</div>
   </div>
   <div class="card">
     <h2>🧺 ETF 精选 Top</h2>
     <table id="tbl-etf"><thead></thead><tbody></tbody></table>
     <div class="note">仅供参考，不构成投资建议。市场有风险，投资需谨慎。</div>
   </div>
+  <div class="card">
+    <h2>📜 历史精选（近期）</h2>
+    <table id="tbl-hist"><thead></thead><tbody></tbody></table>
+    <div class="note">每次收盘扫描的留存记录，用于复盘命中率（不含未来收益，需自行跟踪）。</div>
+  </div>
 </div>
 
 <script>
-const COLS = [
-  ["rank","排名"],["code","代码"],["score","分数"],["position_pct","仓位%"],
-  ["stop_loss_pct","止损%"],["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"]
+const STOCK_COLS = [
+  ["rank","排名"],["code","代码"],["name","名称"],["score","分数"],
+  ["position_pct","仓位%"],["stop_loss_pct","止损%"],
+  ["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"],["attr","因子贡献"]
+];
+const ETF_COLS = [
+  ["rank","排名"],["code","代码"],["name","名称"],["score","分数"],
+  ["position_pct","仓位%"],["stop_loss_pct","止损%"],
+  ["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"],["attr","因子贡献"]
+];
+const HIST_COLS = [
+  ["run_date","日期"],["kind","类型"],["code","代码"],["name","名称"],
+  ["rank","排名"],["score","分数"],["position_pct","仓位%"]
 ];
 
 function fmt(v, pct){
@@ -59,15 +79,27 @@ function fmt(v, pct){
   return pct ? (n*100).toFixed(1) : n.toFixed(2);
 }
 
-function render(tableId, rows){
+function attribution(r){
+  const keys = ["momentum","quality","value","fund_flow","scale","liquidity","premium","tracking_error","expense"];
+  const parts = keys.map(k=>({k, v: Number(r["c_"+k]||0)}))
+                    .filter(x=>Math.abs(x.v)>0.001)
+                    .sort((a,b)=>b.v-a.v);
+  if (!parts.length) return "-";
+  const top = parts.slice(0,3).map(x=>`${x.k[0].toUpperCase()}${x.v>=0?"+":""}${x.v.toFixed(2)}`);
+  return top.join(" ");
+}
+
+function render(tableId, rows, cols){
   const tbl = document.getElementById(tableId);
-  if (!rows.length){ tbl.innerHTML = '<tbody><tr><td colspan="8" style="text-align:center;color:#8a9099">暂无数据（请确认服务器可访问行情接口）</td></tr></tbody>'; return; }
-  let thead = "<tr>" + COLS.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
+  if (!rows.length){ tbl.innerHTML = '<tbody><tr><td colspan="'+cols.length+'" style="text-align:center;color:#8a9099">暂无数据（请确认服务器可访问行情接口）</td></tr></tbody>'; return; }
+  let thead = "<tr>" + cols.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
   let tbody = rows.map(r=>{
-    return "<tr>" + COLS.map(c=>{
+    return "<tr>" + cols.map(c=>{
       let val = r[c[0]];
       if (c[0]==="position_pct" || c[0]==="stop_loss_pct") val = fmt(val, true);
       else if (["score","ret_20","ret_60","vol_60"].includes(c[0])) val = fmt(val, false);
+      else if (c[0]==="attr") return `<td class="attr">${attribution(r)}</td>`;
+      else if (c[0]==="kind") val = val==="stock"?"股票":"ETF";
       if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)>0) val = `<span class="pos">+${val}</span>`;
       if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)<0) val = `<span class="neg">${val}</span>`;
       return `<td>${val}</td>`;
@@ -81,12 +113,21 @@ async function load(force){
   try {
     const r = await fetch("/api/candidates" + (force ? "?force=1" : ""));
     const d = await r.json();
-    render("tbl-stock", d.stocks || []);
-    render("tbl-etf", d.etfs || []);
+    render("tbl-stock", d.stocks || [], STOCK_COLS);
+    render("tbl-etf", d.etfs || [], ETF_COLS);
+    const rg = d.regime || {state:"risk_on", scale:1.0};
+    const badge = document.getElementById("regime");
+    badge.textContent = "市场: " + rg.state + " (缩放 " + rg.scale + ")";
+    badge.className = "badge " + (rg.state==="risk_on" ? "on":"off");
     document.getElementById("ts").textContent = "更新于 " + new Date().toLocaleString();
   } catch(e){
     document.getElementById("ts").textContent = "加载失败：" + e.message;
   }
+  try {
+    const h = await fetch("/api/history");
+    const hd = await h.json();
+    render("tbl-hist", hd || [], HIST_COLS);
+  } catch(e){}
 }
 load(false);
 setInterval(()=>load(false), 300000);
