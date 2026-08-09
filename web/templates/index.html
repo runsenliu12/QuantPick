@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QuantPick · 股+ETF 智能精选</title>
+<style>
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2329; --muted:#8a9099; --line:#e6e8eb; --accent:#2b6de4; --red:#e23b3b; --green:#1aa260; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:16px 24px; display:flex; align-items:center; justify-content:space-between; }
+  header h1 { font-size:18px; margin:0; }
+  header .meta { color:var(--muted); font-size:13px; }
+  .wrap { max-width:1100px; margin:20px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:18px; }
+  .card h2 { font-size:15px; margin:0 0 12px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:right; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+  th { color:var(--muted); font-weight:600; }
+  .pos { color:var(--red); } .neg { color:var(--green); }
+  .btn { border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:8px; padding:6px 14px; cursor:pointer; font-size:13px; }
+  .btn:hover { border-color:var(--accent); color:var(--accent); }
+  .note { color:var(--muted); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📊 QuantPick · 股 + ETF 智能精选</h1>
+  <div class="meta">
+    <span id="ts">加载中…</span>
+    <button class="btn" onclick="load(true)">刷新</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <h2>🥇 股票精选 Top</h2>
+    <table id="tbl-stock"><thead></thead><tbody></tbody></table>
+    <div class="note">分数为多因子 Z-Score 加权，仓位为风控建议上限，非买卖指令。</div>
+  </div>
+  <div class="card">
+    <h2>🧺 ETF 精选 Top</h2>
+    <table id="tbl-etf"><thead></thead><tbody></tbody></table>
+    <div class="note">仅供参考，不构成投资建议。市场有风险，投资需谨慎。</div>
+  </div>
+</div>
+
+<script>
+const COLS = [
+  ["rank","排名"],["code","代码"],["score","分数"],["position_pct","仓位%"],
+  ["stop_loss_pct","止损%"],["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"]
+];
+
+function fmt(v, pct){
+  if (v === null || v === undefined || v === "") return "-";
+  const n = Number(v);
+  if (isNaN(n)) return v;
+  return pct ? (n*100).toFixed(1) : n.toFixed(2);
+}
+
+function render(tableId, rows){
+  const tbl = document.getElementById(tableId);
+  if (!rows.length){ tbl.innerHTML = '<tbody><tr><td colspan="8" style="text-align:center;color:#8a9099">暂无数据（请确认服务器可访问行情接口）</td></tr></tbody>'; return; }
+  let thead = "<tr>" + COLS.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
+  let tbody = rows.map(r=>{
+    return "<tr>" + COLS.map(c=>{
+      let val = r[c[0]];
+      if (c[0]==="position_pct" || c[0]==="stop_loss_pct") val = fmt(val, true);
+      else if (["score","ret_20","ret_60","vol_60"].includes(c[0])) val = fmt(val, false);
+      if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)>0) val = `<span class="pos">+${val}</span>`;
+      if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)<0) val = `<span class="neg">${val}</span>`;
+      return `<td>${val}</td>`;
+    }).join("") + "</tr>";
+  }).join("");
+  tbl.innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+}
+
+async function load(force){
+  document.getElementById("ts").textContent = "加载中…";
+  try {
+    const r = await fetch("/api/candidates" + (force ? "?force=1" : ""));
+    const d = await r.json();
+    render("tbl-stock", d.stocks || []);
+    render("tbl-etf", d.etfs || []);
+    document.getElementById("ts").textContent = "更新于 " + new Date().toLocaleString();
+  } catch(e){
+    document.getElementById("ts").textContent = "加载失败：" + e.message;
+  }
+}
+load(false);
+setInterval(()=>load(false), 300000);
+</script>
+</body>
+</html>
