@@ -11,3 +11,4 @@ data/
 *.log
 .pytest_cache/
 .DS_Store
+.idea/
