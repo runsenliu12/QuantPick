@@ -1,0 +1,7 @@
+flask>=3.0
+flask-cors>=4.0
+akshare>=1.13
+pandas>=2.0
+numpy>=1.24
+requests>=2.31
+scipy>=1.11
