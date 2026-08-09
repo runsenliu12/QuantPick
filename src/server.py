@@ -16,6 +16,7 @@ from src.risk import finalize
 from src.data import DataFetcher
 from src import history as history_mod
 from src.strategy import build_strategy
+from src.performance import compute_performance
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app = Flask(__name__, template_folder=os.path.join(_ROOT, "web", "templates"))
@@ -23,6 +24,9 @@ CORS(app)
 
 _cache = {"ts": 0.0, "data": None}
 _TTL = 300  # 秒
+
+_perf_cache = {"ts": 0.0, "data": None}
+_PERF_TTL = 3600  # 对账较重，缓存 1 小时
 
 
 def get_candidates(force: bool = False) -> dict:
@@ -73,6 +77,22 @@ def api_history():
     cfg = load_config()
     db = get(cfg, "data", "sqlite_path", default="data/quantpick.db")
     return jsonify(history_mod.load_history(db, limit=200))
+
+
+def get_performance(force: bool = False) -> dict:
+    now = time.time()
+    if not force and _perf_cache["data"] and now - _perf_cache["ts"] < _PERF_TTL:
+        return _perf_cache["data"]
+    cfg = load_config()
+    db = get(cfg, "data", "sqlite_path", default="data/quantpick.db")
+    res = compute_performance(db, cfg)
+    _perf_cache.update({"ts": now, "data": res})
+    return res
+
+
+@app.route("/api/performance")
+def api_performance():
+    return jsonify(get_performance(force=request.args.get("force") == "1"))
 
 
 @app.route("/health")
