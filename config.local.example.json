@@ -1,0 +1,12 @@
+{
+  "notifications": {
+    "feishu_webhook_url": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxx",
+    "wechat_webhook_url": "",
+    "enabled": false
+  },
+  "proxy": {
+    "http": "",
+    "https": "",
+    "no_proxy": "localhost,127.0.0.1"
+  }
+}
