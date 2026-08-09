@@ -4,7 +4,8 @@
       "top_n": 10,
       "min_market_cap": 5e9,
       "min_amount": 5e7,
-      "scan_count": 200
+      "scan_count": 200,
+      "max_per_industry": 3
     },
     "etf": {
       "top_n": 10,
@@ -12,7 +13,8 @@
       "min_amount": 5e7,
       "premium_tolerance": 0.01
     },
-    "concurrency": 4
+    "concurrency": 4,
+    "industry_neutral": true
   },
   "models": {
     "active_selection_model": "multi_factor_v1",
@@ -33,10 +35,27 @@
   "risk": {
     "max_position_pct": 0.12,
     "stop_loss_pct": 0.08,
+    "min_stop_loss_pct": 0.05,
+    "max_stop_loss_pct": 0.15,
+    "stop_vol_multiplier": 0.5,
     "max_drawdown_pct": 0.20,
     "max_correlation": 0.7,
+    "dedup": true,
     "total_candidates": 20
   },
+  "regime": {
+    "enabled": true,
+    "index": "000300",
+    "ma_window": 200,
+    "risk_on_scale": 1.0,
+    "risk_off_scale": 0.3
+  },
+  "costs": {
+    "commission": 0.0003,
+    "slippage": 0.0005,
+    "round_trip": 0.001
+  },
+  "benchmark": "000300",
   "server": {
     "host": "0.0.0.0",
     "port": 8080
@@ -44,6 +63,9 @@
   "data": {
     "sqlite_path": "data/quantpick.db",
     "cache_days": 1
+  },
+  "history": {
+    "enabled": true
   },
   "network": {
     "timeouts": {
