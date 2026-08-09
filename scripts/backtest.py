@@ -1,13 +1,16 @@
-"""回测：用与生产一致的多因子 composite 做横截面选股，含手续费/滑点、基准对比与样本外分段。
+"""回测：用与生产一致的多因子 composite 做横截面选股，含真实交易约束与组合优化。
 
 说明：
 - 这是"策略是否有效"的验证，不是实盘。它尽量复用 selection.score_universe，保证回测对象=实盘模型。
 - 因子在每期调仓日"时点化"计算（只用当时可得数据），避免未来函数。
-- 价值/质量/资金流采用"近期快照并持有"的近似（基本面变化慢），动量严格时点化。
-- 交易成本 + 基准(沪深300) + Sharpe/最大回撤/换手/IC，并做前后段(样本内/外)对比。
+- 收益按**完整日度**持有计算（买入持有到下一调仓日），不再只用调仓当日涨跌。
+- 交易约束（A1）：建仓日涨停买不到、平仓日跌停卖不出、停牌顺延，均建模进回测。
+- 组合优化（A3）：权重用风险平价（∝1/波动率）而非近等权。
+- 换手控制（A2）：相邻调仓期限制被替换标的数量，降低摩擦成本。
+- 含交易成本 + 基准(沪深300) + Sharpe/最大回撤/换手/IC，并做前后段(样本内/外)对比。
 
 用法：
-    python scripts/backtest.py --pool 80 --lookback 60 --hold 20 --top 10 --rebalance 21
+    python scripts/backtest.py --pool 80 --lookback 60 --top 10 --rebalance 21
 """
 from __future__ import annotations
 
@@ -23,35 +26,52 @@ import pandas as pd
 from src.config import load_config, get
 from src.selection import score_universe
 from src.data import DataFetcher
+from src.risk import portfolio_weights
+from src.trading import is_limit_up, is_limit_down
 
 
 # ---------------- 纯函数：组合模拟与指标（便于单测） ----------------
 
-def simulate_portfolio(score_matrix: pd.DataFrame, return_matrix: pd.DataFrame,
-                       top_n: int, cost: float) -> pd.Series:
-    """给定 score_matrix(日期×标的) 与 return_matrix(日期×标的, 日收益)，
-    每期选 score 最高的 top_n，等权持有到下期，计入单边换手成本 cost。
-    返回净值序列（起始=1）。"""
-    dates = score_matrix.index
+def simulate_portfolio(ret_matrix: pd.DataFrame, weight_panel: pd.DataFrame,
+                       limit_matrix: pd.DataFrame | None, cost: float,
+                       cfg: dict | None = None) -> pd.Series:
+    """逐日模拟组合净值。
+
+    weight_panel: 日度×标的，每个交易日的目标权重（调仓日变化，其余 forward-fill 得到）。
+    limit_matrix: 日度×标的，当日涨跌幅（百分比），用于涨停买不到/跌停卖不出判断。
+    返回净值序列（起始=1，长度 = 1 + 交易日数）。
+    """
+    up = get(cfg, "trading", "limit_up_pct", default=9.5) if cfg else 9.5
+    down = get(cfg, "trading", "limit_down_pct", default=-9.5) if cfg else -9.5
+    cols = list(ret_matrix.columns)
+    dates = list(ret_matrix.index)
+
+    weights = pd.Series(0.0, index=cols)
     nav = [1.0]
-    weights = pd.Series(0.0, index=score_matrix.columns)
-    for i in range(1, len(dates)):
-        prev_ret = return_matrix.iloc[i]
-        nav.append(nav[-1] * (1 + (weights * prev_ret).sum()))
-        # 重新选股
-        sc = score_matrix.iloc[i]
-        sc = sc.dropna().sort_values(ascending=False)
-        if len(sc) < top_n:
-            new_w = pd.Series(0.0, index=score_matrix.columns)
-        else:
-            sel = sc.head(top_n).index
-            new_w = pd.Series(1.0 / top_n, index=sel)
-            new_w = new_w.reindex(score_matrix.columns).fillna(0.0)
-        # 换手成本
-        turnover = (new_w - weights).abs().sum() / 2.0
-        nav[-1] *= (1 - cost * turnover)
-        weights = new_w
-    return pd.Series(nav, index=dates)
+    for i, d in enumerate(dates):
+        ideal = weight_panel.loc[d].reindex(cols).fillna(0.0)
+        is_rebal = not ideal.equals(weights)
+        if is_rebal:
+            eff = ideal.copy()
+            if limit_matrix is not None and d in limit_matrix.index:
+                lim = limit_matrix.loc[d]
+                # 涨停买不到：新持仓当日涨停 -> 该标的不计入（权重置 0）
+                for c in eff.index:
+                    if eff[c] > 0 and bool(is_limit_up(lim.get(c), up)):
+                        eff[c] = 0.0
+                # 跌停卖不出：旧持仓当日跌停且本期被换出 -> 继续持有
+                for c in weights.index:
+                    if weights[c] > 0 and eff[c] == 0 and bool(is_limit_down(lim.get(c), down)):
+                        eff[c] = weights[c]
+            s = eff.sum()
+            if s > 0:
+                eff = eff / s
+            turn = (eff - weights).abs().sum() / 2.0
+            nav[-1] *= (1 - cost * turn)
+            weights = eff
+        day_ret = ret_matrix.loc[d].reindex(cols).fillna(0.0)
+        nav.append(nav[-1] * (1 + float((weights * day_ret).sum())))
+    return pd.Series(nav)
 
 
 def compute_metrics(nav: pd.Series, benchmark_nav: pd.Series | None = None) -> dict:
@@ -82,15 +102,19 @@ def compute_metrics(nav: pd.Series, benchmark_nav: pd.Series | None = None) -> d
 
 # ---------------- 数据编排 ----------------
 
-def _build_close_panel(fetcher: DataFetcher, codes) -> pd.DataFrame:
+def _build_panel(fetcher: DataFetcher, codes, col: str) -> pd.DataFrame:
+    """构建日度面板（col 为 '收盘' 或 '涨跌幅'）。"""
     series = {}
     for code in codes:
         try:
-            hist = fetcher.get_stock_hist(code)
-            if hist is None or hist.empty or "收盘" not in hist.columns:
+            if col == "收盘":
+                hist = fetcher.get_stock_hist(code)
+            else:
+                hist = fetcher.get_stock_hist(code)
+            if hist is None or hist.empty or col not in hist.columns:
                 continue
-            close = pd.to_numeric(hist["收盘"], errors="coerce").dropna()
-            series[code] = close
+            val = pd.to_numeric(hist[col], errors="coerce").dropna()
+            series[code] = val
         except Exception:
             continue
     if not series:
@@ -104,8 +128,6 @@ def _fetch_held_fundamentals(fetcher: DataFetcher, codes) -> pd.DataFrame:
     for code in codes:
         try:
             fin = fetcher.get_stock_financials(code)
-            ff = fetcher.get_stock_fund_flow(code)
-            f5 = ff.get("主力净流入") if isinstance(ff, dict) else None
             rows.append({
                 "code": code,
                 "roe": fin.get("roe"), "debt_ratio": fin.get("debt_ratio"),
@@ -117,6 +139,24 @@ def _fetch_held_fundamentals(fetcher: DataFetcher, codes) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _cap_turnover_panel(prev: pd.Series, cur: pd.Series, max_turn: float) -> pd.Series:
+    """回测版换手控制：限制 cur 中"新进入"标的数量不超过 max_turn*上期数量。"""
+    prev_codes = set(prev[prev > 0].index)
+    cur_codes = set(cur[cur > 0].index)
+    new_codes = cur_codes - prev_codes
+    if not new_codes:
+        return cur
+    allow = int(round(max_turn * max(len(prev_codes), 1)))
+    # 按 cur 权重降序保留允许数量的新进入标的
+    new_w = cur[list(new_codes)].sort_values(ascending=False)
+    keep_new = set(new_w.head(allow).index)
+    out = cur.copy()
+    for c in new_codes - keep_new:
+        out[c] = 0.0
+    s = out.sum()
+    return out / s if s > 0 else out
+
+
 def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int = 60,
                  hold: int = 20, top_n: int = 10, rebalance: int = 21,
                  cost: float = 0.001, benchmark: str = "000300") -> dict:
@@ -124,18 +164,18 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
     uni = uni.sort_values("amount", ascending=False).head(pool)
     codes = uni["code"].astype(str).tolist()
 
-    close = _build_close_panel(fetcher, codes)
+    close = _build_panel(fetcher, codes, "收盘")
     if close.shape[1] < top_n:
         raise RuntimeError(f"可用标的不够（{close.shape[1]} < {top_n}），扩大 --pool")
-    fund = _fetch_held_fundamentals(fetcher, codes)
-    fund = fund.set_index("code")
+    pct = _build_panel(fetcher, codes, "涨跌幅")
+    fund = _fetch_held_fundamentals(fetcher, codes).set_index("code")
 
-    # 基准
     bench_hist = fetcher.get_index_hist(benchmark)
-    bench_close = pd.to_numeric(bench_hist["收盘"], errors="coerce").dropna() if bench_hist is not None and not bench_hist.empty else None
+    bench_close = (pd.to_numeric(bench_hist["收盘"], errors="coerce").dropna()
+                   if bench_hist is not None and not bench_hist.empty else None)
 
-    # 时点化因子快照
-    reb_dates = close.index[::rebalance][1:]  # 跳过首期（需历史）
+    # 时点化因子快照（仅调仓日）
+    reb_dates = close.index[::rebalance][1:]
     score_rows = []
     for d in reb_dates:
         pos = close.index.get_loc(d)
@@ -144,15 +184,13 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         win = close.iloc[: pos + 1]
         ret_20 = (win.iloc[-1] / win.iloc[-1 - 20] - 1)
         ret_60 = (win.iloc[-1] / win.iloc[-1 - 60] - 1)
-        high252 = win.rolling(252).max().iloc[-1]
-        p2h = win.iloc[-1] / high252
         snap = pd.DataFrame({
             "ret_20": ret_20, "ret_60": ret_60,
             "pe": fund["pe"], "pb": fund["pb"], "dividend_yield": fund["dividend_yield"],
             "roe": fund["roe"], "debt_ratio": fund["debt_ratio"],
             "fund_flow_5": 0.0, "fund_flow_20": 0.0, "industry": None,
-        }).T  # rows=features, cols=codes
-        snap = snap.T  # back to rows=codes
+        }).T
+        snap = snap.T
         snap = score_universe(snap, cfg, "stock")
         snap["date"] = d
         score_rows.append(snap[["date", "score"]])
@@ -161,21 +199,48 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         raise RuntimeError("未生成任何调仓期因子快照，检查历史长度。")
     score_panel = pd.concat(score_rows).pivot(index="date", columns="code", values="score")
 
-    # 收益矩阵（日收益），对齐到 score_panel 的日期范围
-    ret_matrix = close.pct_change().reindex(score_panel.index).fillna(0)
+    # 日度收益与波动率面板
+    ret_matrix = close.pct_change().reindex(score_panel.index)
     ret_matrix = ret_matrix[score_panel.columns]
+    vol_panel = ret_matrix.rolling(60).std() * np.sqrt(252) * 100.0  # 年化波动率(百分比)
 
-    nav = simulate_portfolio(score_panel, ret_matrix, top_n, cost)
+    # 每期目标权重（风险平价），应用 A2 换手控制
+    max_turn = get(cfg, "turnover", "max_turnover_pct", default=1.0)
+    w_rows = []
+    for d in score_panel.index:
+        sc = score_panel.loc[d].dropna().sort_values(ascending=False)
+        if len(sc) < top_n:
+            w_rows.append(pd.Series(0.0, index=score_panel.columns))
+            continue
+        sel = sc.head(top_n).index
+        w = portfolio_weights(vol_panel.loc[d, sel], cfg)
+        w = w.reindex(score_panel.columns).fillna(0.0)
+        w_rows.append(w)
+    weight_panel = pd.DataFrame(w_rows, index=score_panel.index)
+    if max_turn < 1.0:
+        fixed = [weight_panel.iloc[0]]
+        for k in range(1, len(weight_panel)):
+            fixed.append(_cap_turnover_panel(weight_panel.iloc[k - 1], weight_panel.iloc[k], max_turn))
+        weight_panel = pd.DataFrame(fixed, index=score_panel.index)
+    # forward-fill 到全部交易日
+    weight_panel = weight_panel.reindex(ret_matrix.index).ffill().fillna(0.0)
 
+    limit_matrix = pct.reindex(ret_matrix.index) if not pct.empty else None
+
+    nav = simulate_portfolio(ret_matrix, weight_panel, limit_matrix, cost, cfg)
+
+    # 基准净值（相同交易日轴）
     bench_nav = None
     if bench_close is not None:
-        bc = bench_close.reindex(score_panel.index).ffill().dropna()
-        if len(bc) == len(nav):
-            bench_nav = (1 + bc.pct_change().fillna(0)).cumprod()
+        bc = bench_close.reindex(ret_matrix.index).ffill().dropna()
+        if len(bc) > 1:
+            bret = bc.pct_change().fillna(0.0)
+            bn = (1 + bret).cumprod()
+            bench_nav = pd.concat([pd.Series([1.0]), bn]).reset_index(drop=True)
+            bench_nav = bench_nav.iloc[: len(nav)].reset_index(drop=True)
 
     metrics = compute_metrics(nav, bench_nav)
 
-    # 样本内/外分段
     half = len(nav) // 2
     seg = {
         "in_sample": compute_metrics(nav.iloc[:half], bench_nav.iloc[:half] if bench_nav is not None else None),
