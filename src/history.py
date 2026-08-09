@@ -8,6 +8,8 @@ import os
 import sqlite3
 from typing import List, Optional
 
+import pandas as pd
+
 
 _SCHEMA = """CREATE TABLE IF NOT EXISTS selections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,3 +80,24 @@ def load_history(path: str, limit: int = 500) -> List[dict]:
          "rank": r[4], "score": r[5], "position_pct": r[6], "stop_loss_pct": r[7]}
         for r in rows
     ]
+
+
+def load_latest_run(path: str, kind: str | None = None) -> pd.DataFrame:
+    """读取最近一次 run_date 的选中清单（用于换手率控制的上一期对比）。"""
+    conn = _conn(path)
+    try:
+        row = conn.execute("SELECT MAX(run_date) FROM selections").fetchone()
+        if not row or row[0] is None:
+            return pd.DataFrame()
+        rd = row[0]
+        q = ("SELECT run_date, kind, code, name, rank, score, position_pct, stop_loss_pct "
+             "FROM selections WHERE run_date=?")
+        params = [rd]
+        if kind:
+            q += " AND kind=?"
+            params.append(kind)
+        rows = conn.execute(q, params).fetchall()
+    finally:
+        conn.close()
+    return pd.DataFrame(rows, columns=["run_date", "kind", "code", "name",
+                                       "rank", "score", "position_pct", "stop_loss_pct"])
