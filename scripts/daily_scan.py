@@ -18,6 +18,8 @@ import os
 import sys
 from datetime import date
 
+import pandas as pd
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import load_config, get
@@ -29,6 +31,46 @@ from src import history as history_mod
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("quantpick.scan")
+
+
+def apply_turnover(new_df, prev_df, cfg, top_n):
+    """A2 换手率控制 + 再平衡粘性：限制每期被替换的标的数量，降低摩擦成本。
+
+    规则：
+    - prev 中仍在候选且分数未明显下滑(>= prev_score - min_score_gap)的标的保留。
+    - 其余名额用 prev 之外的新候选按 rank 补足，但补入数量不超过
+      max_turnover_pct * 上期数量。
+    仓位沿用本期 risk 计算的 position_pct（与 regime 缩放一致）。
+    """
+    if prev_df is None or prev_df.empty or new_df is None or new_df.empty:
+        return new_df
+    if not get(cfg, "turnover", "enabled", default=True):
+        return new_df
+
+    max_turn = get(cfg, "turnover", "max_turnover_pct", default=1.0)
+    min_gap = get(cfg, "turnover", "min_score_gap", default=0.0)
+
+    prev = prev_df.set_index("code")
+    prev_codes = set(prev.index)
+    new_idx = new_df.set_index("code")
+
+    keep_codes = [
+        c for c in prev_codes
+        if c in new_idx.index
+        and float(new_idx.loc[c, "score"]) >= float(prev.loc[c, "score"]) - min_gap
+    ]
+    kept = new_df[new_df["code"].astype(str).isin(keep_codes)].copy()
+    fresh = new_df[~new_df["code"].astype(str).isin(prev_codes)].copy()
+
+    allow = int(round(max_turn * max(len(prev_codes), 1)))
+    room = max(0, top_n - len(keep_codes))
+    allow = min(allow, room)
+    fresh = fresh.sort_values("rank").head(allow)
+
+    out = pd.concat([kept, fresh], ignore_index=True)
+    out = out.sort_values("rank").reset_index(drop=True)
+    out["rank"] = out.index + 1
+    return out
 
 
 def main():
@@ -54,6 +96,17 @@ def main():
     try:
         res = run_selection(cfg, fetcher)
         res = finalize(res, cfg, fetcher)
+
+        # A2 换手率控制 + 再平衡粘性：对比上一期，限制每期被替换的标的数量
+        if get(cfg, "turnover", "enabled", default=True):
+            top_s = get(cfg, "selection", "stock", "top_n", default=10)
+            top_e = get(cfg, "selection", "etf", "top_n", default=10)
+            prev_s = history_mod.load_latest_run(db, "stock")
+            prev_e = history_mod.load_latest_run(db, "etf")
+            if "stocks" in res and not res["stocks"].empty:
+                res["stocks"] = apply_turnover(res["stocks"], prev_s, cfg, top_s)
+            if "etfs" in res and not res["etfs"].empty:
+                res["etfs"] = apply_turnover(res["etfs"], prev_e, cfg, top_e)
     finally:
         fetcher.close()
 
