@@ -10,5 +10,10 @@ services:
       - ./config.local.json:/app/config.local.json:ro
       - ./data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     # 如需定时扫描而非常驻 Web，可注释上面的 ports/CMD 并改用：
     # command: ["python", "scripts/daily_scan.py"]
