@@ -43,6 +43,11 @@
     "dedup": true,
     "total_candidates": 20
   },
+  "portfolio": {
+    "method": "risk_parity",
+    "target_vol": 0.15,
+    "max_position_pct": 0.12
+  },
   "regime": {
     "enabled": true,
     "index": "000300",
@@ -66,6 +71,18 @@
   },
   "history": {
     "enabled": true
+  },
+  "trading": {
+    "limit_up_pct": 9.5,
+    "limit_down_pct": -9.5,
+    "max_defer_days": 5,
+    "min_liquid_amount": 5000000,
+    "liquidity_slippage": 0.003
+  },
+  "turnover": {
+    "enabled": true,
+    "max_turnover_pct": 0.5,
+    "min_score_gap": 0.2
   },
   "performance": {
     "horizons": [5, 20, 60],
