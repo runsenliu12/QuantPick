@@ -159,6 +159,21 @@
     <div class="note">每次收盘扫描的留存记录，用于复盘命中率（不含未来收益，需自行跟踪）。</div>
   </div>
 
+  <!-- 纸上交易战绩 -->
+  <div class="card">
+    <h2>📈 纸上交易战绩 <span class="tag">推荐 vs 实际</span></h2>
+    <div id="perf-cards" class="grid" style="margin-bottom:12px"></div>
+    <div class="card" style="background:var(--bg);border:none;padding:8px">
+      <svg id="navChart" viewBox="0 0 680 220" width="100%" height="220" preserveAspectRatio="none"></svg>
+      <div class="note" id="navLegend"></div>
+    </div>
+    <table id="tbl-ph"><thead></thead><tbody></tbody></table>
+    <div class="note">分持有期命中率：推荐后 N 个交易日收益为正的占比。</div>
+    <h2 style="margin-top:18px">🔎 近期推荐明细（含实际涨跌）</h2>
+    <table id="tbl-recent"><thead></thead><tbody></tbody></table>
+    <div class="note" id="perf-note"></div>
+  </div>
+
   <footer>策略参数来自 config.json；候选数据需服务器连通行情接口后生成。QuantPick · 量化研究工具。</footer>
 </div>
 
@@ -177,6 +192,22 @@ const HIST_COLS = [
   ["run_date","日期"],["kind","类型"],["code","代码"],["name","名称"],
   ["rank","排名"],["score","分数"],["position_pct","仓位%"]
 ];
+// 命中率/收益类列（数值已是百分点，直接加 %），用于着色
+const PCT_COLS = new Set(["ret_5","ret_20","ret_60","mean_return","median_return","win_rate","stock","etf"]);
+const PH_COLS = [
+  ["h","持有期"],["count","样本"],["win_rate","命中率"],["mean_return","平均收益"],
+  ["median_return","中位收益"],["stock","股均值"],["etf","ETF均值"]
+];
+const REC_COLS = [
+  ["run_date","日期"],["kind","类型"],["name","名称/代码"],["rank","排名"],
+  ["score","分数"],["entry","建仓价"],["ret_5","5日"],["ret_20","20日"],["ret_60","60日"]
+];
+
+function fmtPctRaw(v){
+  if (v===null || v===undefined) return "持仓中";
+  const n=Number(v); if(isNaN(n)) return v;
+  return (n>=0?"+":"")+n.toFixed(1)+"%";
+}
 
 function fmt(v, pct){
   if (v === null || v === undefined || v === "") return "-";
@@ -204,11 +235,16 @@ function render(tableId, rows, cols){
   let thead = "<tr>" + cols.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
   let tbody = rows.map(r=>{
     return "<tr>" + cols.map(c=>{
+      if (c[0]==="attr") return `<td class="attr">${attribution(r)}</td>`;
       let val = r[c[0]];
       if (c[0]==="position_pct" || c[0]==="stop_loss_pct") val = fmt(val, true);
       else if (["score","ret_20","ret_60","vol_60"].includes(c[0])) val = fmt(val, false);
-      else if (c[0]==="attr") return `<td class="attr">${attribution(r)}</td>`;
       else if (c[0]==="kind") val = val==="stock"?"股票":"ETF";
+      else if (PCT_COLS.has(c[0])){
+        const s = fmtPctRaw(val);
+        const cls = val===null||val===undefined?"":(Number(val)>=0?"pos":"neg");
+        return `<td class="${cls}">${s}</td>`;
+      }
       if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)>0) val = `<span class="pos">+${val}</span>`;
       if ((c[0]==="ret_20"||c[0]==="ret_60") && Number(val)<0) val = `<span class="neg">${val}</span>`;
       return `<td>${val}</td>`;
@@ -236,6 +272,65 @@ async function load(force){
     const h = await fetch("/api/history");
     const hd = await h.json();
     render("tbl-hist", hd || [], HIST_COLS);
+  } catch(e){}
+  loadPerf();
+}
+
+function drawNav(nav){
+  const svg = document.getElementById("navChart");
+  const s = nav.strategy, b = nav.benchmark;
+  if (!s || !s.length){ svg.innerHTML = '<text x="20" y="40" fill="#8a9099">暂无净值数据（运行 paper_trading 后生成）</text>'; return; }
+  const W=680, H=220, pad=34;
+  const all = s.concat(b).filter(x=>x!=null);
+  const min=Math.min(...all), max=Math.max(...all);
+  const x = i => pad + (W-2*pad) * (s.length>1 ? i/(s.length-1) : 0);
+  const y = v => H-pad - (H-2*pad) * ((v-min)/((max-min)||1));
+  const path = arr => arr.map((v,i)=> (i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)).join(" ");
+  const y1 = y(1.0);
+  svg.innerHTML =
+    `<line x1="${pad}" y1="${y1.toFixed(1)}" x2="${W-pad}" y2="${y1.toFixed(1)}" stroke="#e6e8eb" stroke-dasharray="4 4"/>`+
+    `<path d="${path(b)}" fill="none" stroke="#8a9099" stroke-width="1.5"/>`+
+    `<path d="${path(s)}" fill="none" stroke="#2b6de4" stroke-width="2.5"/>`+
+    `<text x="${pad}" y="16" fill="#2b6de4" font-size="12" font-weight="600">策略</text>`+
+    `<text x="${pad+38}" y="16" fill="#8a9099" font-size="12">基准</text>`;
+  document.getElementById("navLegend").textContent =
+    `策略净值 1.0 → ${s[s.length-1].toFixed(3)}；基准 → ${b[b.length-1].toFixed(3)}。横轴为推荐后交易日，单位净值（前复权）。`;
+}
+
+async function loadPerf(){
+  try {
+    const r = await fetch("/api/performance");
+    const d = await r.json();
+    const pc = document.getElementById("perf-cards");
+    if (d.empty){
+      pc.innerHTML = `<div class="card" style="margin:0"><div class="lead">${d.message||"暂无战绩数据"}</div></div>`;
+      document.getElementById("navChart").innerHTML="";
+      return;
+    }
+    const p=d.portfolio, b=d.benchmark_metrics;
+    const cards = [
+      ["策略总收益", p.total_return+"%", p.total_return>=0],
+      ["基准总收益", b.total_return+"%", b.total_return>=0],
+      ["超额收益", d.excess_return+"%", d.excess_return>=0],
+      ["策略 Sharpe", p.sharpe, null],
+      ["策略年化", p.annualized+"%", null],
+      ["最大回撤", p.max_drawdown+"%", "neg"],
+      ["与基准相关性", d.correlation, null],
+      ["样本数", d.rec_count+" 条", null],
+    ];
+    pc.innerHTML = cards.map(c=>{
+      const cls = c[2]===true?"pos":c[2]===false?"neg":(c[2]==="neg"?"neg":"");
+      return `<div class="card" style="margin:0"><div style="font-size:12px;color:var(--muted)">${c[0]}</div><div style="font-size:20px;font-weight:600;margin-top:4px" class="${cls}">${c[1]}</div></div>`;
+    }).join("");
+    drawNav(d.nav);
+    const ph = Object.entries(d.per_horizon).map(([h,m])=>({
+      h:h+"日", count:m.count, win_rate:m.win_rate, mean_return:m.mean_return,
+      median_return:m.median_return, stock:(m.by_kind&&m.by_kind.stock), etf:(m.by_kind&&m.by_kind.etf)
+    }));
+    render("tbl-ph", ph, PH_COLS);
+    render("tbl-recent", d.recent||[], REC_COLS);
+    document.getElementById("perf-note").textContent =
+      `生成时间 ${d.generated_at}，基准 ${d.benchmark_name}。建仓价=推荐日后首个交易日收盘（前复权），平仓价=建仓后N个交易日收盘。本报告为量化研究复盘，非买卖建议。`;
   } catch(e){}
 }
 load(false);
