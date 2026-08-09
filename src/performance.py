@@ -6,16 +6,19 @@
 方法（透明、可复现）：
 - 对历史每一天的推荐，按推荐日（run_date）次一交易日作为建仓价（entry），
   取 entry 之后 N 个交易日（N=5/20/60）的收盘价作为平仓价（exit），计算持有收益。
+- 交易约束（A1）：建仓日涨停买不到→顺延；平仓日跌停卖不出→顺延；停牌→顺延复牌；
+  成交额过低→扣流动性冲击成本。这些都让纸交结果更贴近实盘。
 - 单笔战绩：命中率（收益>0 占比）、平均/中位数收益、样本数。
-- 组合净值：每个推荐日把当天的股+ETF 篮子等权持有 N 日，按其实际交易日窗口
-  对齐到统一时间轴，每日收益 = 当日所有"持仓中"篮子的等权平均；净值 = 连乘(1+日收益)。
-  基准为沪深300 同期净值（指数本身无需再平衡假设）。
+- 组合净值：每个推荐日把当天的股+ETF 篮子按各自 position_pct 加权持有 N 日，
+  对齐到统一时间轴；每日收益 = 当日所有"持仓中"篮子的等权平均；净值 = 连乘。
+  基准为沪深300 同期净值。
 - 指标：总收益、年化、Sharpe、最大回撤、相对基准超额与相关性。
 
 注意：仅做研究复盘，非实盘信号，亦非收益承诺。
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -27,6 +30,7 @@ import pandas as pd
 
 from src.config import load_config, get
 from src.data import DataFetcher
+from src.trading import resolve_entry, resolve_exit, liquidity_slippage
 
 logger = logging.getLogger("quantpick.performance")
 
@@ -83,8 +87,8 @@ def load_selections(db_path: str, limit: int = 20000) -> pd.DataFrame:
     return df
 
 
-def _hist_close(fetcher: DataFetcher, code: str, kind: str) -> Optional[pd.Series]:
-    """返回以日期为索引的收盘序列（前复权）。"""
+def _hist_close(fetcher: DataFetcher, code: str, kind: str):
+    """返回以日期为索引的历史 DataFrame（含 收盘/涨跌幅/成交额）。取不到返回 None。"""
     try:
         hist = (fetcher.get_etf_hist(code)
                 if kind == "etf"
@@ -95,11 +99,12 @@ def _hist_close(fetcher: DataFetcher, code: str, kind: str) -> Optional[pd.Serie
     if hist is None or hist.empty or "收盘" not in hist.columns:
         return None
     close = pd.to_numeric(hist["收盘"], errors="coerce").dropna()
-    idx = pd.to_datetime(hist["日期"]).values
     if len(close) == 0:
         return None
-    s = pd.Series(close.values, index=idx).sort_index()
-    return s
+    hist = hist.copy()
+    hist["收盘"] = close
+    hist = hist.set_index(pd.to_datetime(hist["日期"])).sort_index()
+    return hist
 
 
 # ---------- 主计算 ----------
@@ -132,44 +137,70 @@ def compute_performance(db_path: str, cfg: Optional[dict] = None,
             bench_close = pd.Series(bc.values,
                                     index=pd.to_datetime(bench_hist["日期"]).values).sort_index()
 
-        # 逐条推荐：entry/exit 收益 + 持仓窗口日收益
         rec_rows: List[dict] = []
-        baskets: List[dict] = []  # {run_date, daily: Series(日期索引, 日收益)}
-        by_kind = {"stock": {h: [] for h in horizons}, "etf": {h: [] for h in horizons}}
+        basket_items: Dict[tuple, list] = {}  # (run_date, kind) -> [(weight, daily_series)]
 
         for _, row in df.iterrows():
             kind = str(row["kind"]); code = str(row["code"]); rd = str(row["run_date"])
-            close = _hist_close(fetcher, code, kind)
-            if close is None:
+            hist = _hist_close(fetcher, code, kind)
+            if hist is None:
                 continue
             rd_dt = pd.to_datetime(rd)
-            mask = close.index >= rd_dt
+            mask = hist.index >= rd_dt
             if not mask.any():
                 continue
-            ei = int(np.argmax(mask))  # 建仓日 = 推荐日后首个交易日
-            entry = float(close.iloc[ei])
-            # 各持有期收益
+            ei0 = int(np.argmax(mask))  # 推荐日后首个交易日
+            ent = resolve_entry(hist, ei0, cfg)
+            if ent is None:
+                continue  # 窗口内始终涨停/停牌，买不到
+            ei, entry = ent
+
+            # 流动性冲击（双边一次性成本），从单笔收益中扣除
+            amt = hist["成交额"].iloc[ei] if "成交额" in hist.columns else None
+            liq = liquidity_slippage(amt, cfg) * 2
+
             per_h = {}
             for h in horizons:
-                xi = ei + h
-                if xi < len(close):
-                    per_h[h] = float(close.iloc[xi]) / entry - 1.0
+                ex = resolve_exit(hist, ei + h, cfg)
+                if ex is None:
+                    continue  # 窗口内始终跌停/停牌，卖不出
+                xi, exit_p = ex
+                per_h[h] = exit_p / entry - 1.0 - liq
+
             # 持仓窗口日收益（长度 max_h），用于组合净值
-            last = min(len(close) - 1, ei + max_h)
+            last = min(len(hist) - 1, ei + max_h)
             if last <= ei:
                 continue
-            dr = (close / close.shift(1) - 1).iloc[ei + 1:last + 1]
-            dr.index = close.index[ei + 1:last + 1]
+            close = hist["收盘"]
+            dr = (close / close.shift(1) - 1).iloc[ei + 1:last + 1].copy()
+            dr.index = hist.index[ei + 1:last + 1]
+
+            w = float(row.get("position_pct") or 0) or 1.0
             rec_rows.append({
                 "run_date": rd, "kind": kind, "code": code, "name": row.get("name"),
                 "rank": int(row.get("rank") or 0), "score": float(row.get("score") or 0),
                 "entry": entry, "per_h": per_h,
             })
-            baskets.append({"run_date": rd, "kind": kind, "daily": dr})
+            basket_items.setdefault((rd, kind), []).append((w, dr))
 
         if not rec_rows:
             return {"empty": True,
                     "message": "历史推荐存在，但均无法取到后续行情（数据源不可达或样本过短），暂不能对账。"}
+
+        # 按 (run_date, kind) 聚合为加权篮子
+        baskets: List[dict] = []
+        for (rd, kind), items in basket_items.items():
+            all_d = pd.DatetimeIndex([])
+            for _, s in items:
+                all_d = all_d.union(s.index)
+            all_d = all_d.sort_values()
+            acc = pd.Series(0.0, index=all_d)
+            tot = 0.0
+            for w, s in items:
+                acc = acc + w * s.reindex(all_d).fillna(0.0)
+                tot += w
+            daily = (acc / tot) if tot > 0 else acc
+            baskets.append({"run_date": rd, "kind": kind, "daily": daily})
 
         # 单笔战绩（按持有期）
         per_horizon = {}
@@ -194,10 +225,9 @@ def compute_performance(db_path: str, cfg: Optional[dict] = None,
                     },
                 }
 
-        # 组合净值：按交易日窗口对齐，每日 = 持仓篮子等权平均
+        # 组合净值
         nav, bench_nav, nav_dates = _build_nav(baskets, bench_close, horizons)
 
-        # 净值指标
         nav_series = pd.Series(nav, index=pd.to_datetime(nav_dates)) if nav else pd.Series(dtype=float)
         bench_series = pd.Series(bench_nav, index=pd.to_datetime(nav_dates)) if bench_nav else pd.Series(dtype=float)
         nav_daily = nav_series.pct_change().fillna(0)
@@ -218,7 +248,6 @@ def compute_performance(db_path: str, cfg: Optional[dict] = None,
         }
         corr = float(nav_daily.corr(bench_daily)) if len(nav_daily) > 2 else None
 
-        # 近期推荐明细（含 20 日结果，未到期标"持仓中"）
         recent = sorted(rec_rows, key=lambda r: r["run_date"], reverse=True)[:20]
         recent_out = [{
             "run_date": r["run_date"], "kind": r["kind"], "code": r["code"],
@@ -261,24 +290,20 @@ def _build_nav(baskets: List[dict], bench_close: Optional[pd.Series], horizons):
     if not baskets:
         return [], [], []
 
-    # 统一时间轴：所有篮子窗口的并集（交易日）
     all_dates = pd.DatetimeIndex([])
     for b in baskets:
         all_dates = all_dates.union(b["daily"].index)
     all_dates = all_dates.sort_values()
 
-    # 每个篮子映射到统一轴上的日收益（窗口外为 NaN）
     mat = pd.DataFrame(index=all_dates, columns=range(len(baskets)), dtype=float)
     for i, b in enumerate(baskets):
         s = b["daily"].reindex(all_dates)
         mat.iloc[:, i] = s.values
 
-    # 逐日：持仓篮子等权平均（仅对当日有数据的篮子）
     daily_mean = mat.mean(axis=1, skipna=True).fillna(0.0)
     strat_nav = (1.0 + daily_mean).cumprod()
     strat_nav = strat_nav.where(strat_nav != 0, 1.0)
 
-    # 基准：对齐到同一轴
     if bench_close is not None and len(bench_close) > 1:
         bc = bench_close.reindex(all_dates).ffill().bfill()
         bench_daily = bc / bc.shift(1) - 1
@@ -353,7 +378,7 @@ def build_html_report(perf: dict) -> str:
  <div class='card'><div class='l'>与基准相关性</div><div class='v'>{perf['correlation']}</div></div>
 </div>
 
-<div class='sec'>分持有期命中率（推荐后 N 日收益）</div>
+<div class='sec'>分持有期命中率（推荐后 N 日收益，已计入交易约束）</div>
 <table><tr><th>持有期</th><th>样本数</th><th>命中率</th><th>平均收益</th><th>中位数</th><th>股均值</th><th>ETF均值</th></tr>
 {ph_rows}</table>
 
@@ -362,8 +387,8 @@ def build_html_report(perf: dict) -> str:
 {rc_rows}</table>
 
 <div class='note'>
-方法论：建仓价 = 推荐日之后首个交易日收盘价（前复权）；平仓价 = 建仓后 N 个交易日收盘价；
-组合净值 = 每个推荐日把当日股+ETF 等权持有 N 日，按实际交易日窗口对齐到统一时间轴，每日收益为当日所有持仓篮子的等权平均后连乘。
+方法论：建仓价 = 推荐日之后首个可交易日收盘价（前复权，涨停/停牌自动顺延）；平仓价 = 建仓后 N 个交易日首个可交易日收盘价（跌停/停牌顺延）；
+单笔收益已扣除双边流动性冲击成本。组合净值 = 每个推荐日把当日股+ETF 按各自 position_pct 加权持有 N 日，对齐统一时间轴后逐日等权平均再连乘。
 本报告为量化研究复盘，非买卖建议，亦非收益承诺。
 </div>
 </div></body></html>"""
@@ -372,19 +397,12 @@ def build_html_report(perf: dict) -> str:
 def save_report(perf: dict, out_json: str, out_html: str) -> None:
     os.makedirs(os.path.dirname(out_json) or ".", exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
-        json_dump(perf, f)
+        json.dump(perf, f, ensure_ascii=False, indent=2, default=str)
     with open(out_html, "w", encoding="utf-8") as f:
         f.write(build_html_report(perf))
 
 
-def json_dump(obj, f):
-    import json
-    json.dump(obj, f, ensure_ascii=False, indent=2, default=str)
-
-
 if __name__ == "__main__":
-    # 直接运行：计算并保存报告
-    import sys
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
     cfg = load_config()
     db = get(cfg, "data", "sqlite_path", default="data/quantpick.db")
