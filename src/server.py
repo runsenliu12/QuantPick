@@ -1,4 +1,4 @@
-"""Web 看板：Flask 提供候选清单 API 与简单页面，适合挂服务器常驻访问。
+"""Web 看板：Flask 提供候选清单 API 与策略面板，适合挂服务器常驻访问。
 
 运行：python -m src.server   （项目根目录下执行）
 访问：http://服务器IP:8080
@@ -15,6 +15,7 @@ from src.selection import run_selection
 from src.risk import finalize
 from src.data import DataFetcher
 from src import history as history_mod
+from src.strategy import build_strategy
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app = Flask(__name__, template_folder=os.path.join(_ROOT, "web", "templates"))
@@ -52,7 +53,14 @@ def get_candidates(force: bool = False) -> dict:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    cfg = load_config()
+    strategy = build_strategy(cfg)
+    return render_template("index.html", strategy=strategy)
+
+
+@app.route("/api/strategy")
+def api_strategy():
+    return jsonify(build_strategy(load_config()))
 
 
 @app.route("/api/candidates")
