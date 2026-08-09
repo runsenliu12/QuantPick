@@ -1,0 +1,11 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+venv
+env
+data
+config.local.json
+*.md
+*.log
