@@ -25,6 +25,46 @@ def recommend_position(score_series, max_pct: float, total: float = 1.0) -> pd.S
     return w.clip(upper=max_pct)
 
 
+def portfolio_weights(vol_series, cfg: dict, default_max: float = 0.12) -> pd.Series:
+    """组合层权重（A3）：在单标封顶之上，用波动率做风险平价/目标波动，替代近等权。
+
+    - risk_parity：权重 ∝ 1/年化波动率，低波动标的多配。
+    - vol_target：各标的杠杆 = target_vol / vol，归一化。
+    - equal：退回等权。
+    封顶后剩余额度按"未封顶标的"比例补回，保证组合权重和=1。
+    """
+    method = get(cfg, "portfolio", "method", default="risk_parity")
+    vol = pd.to_numeric(vol_series, errors="coerce") / 100.0  # 百分比 -> 小数
+    if vol.notna().any():
+        vol = vol.fillna(vol.median())
+    else:
+        vol = vol.fillna(0.2)
+    maxp = get(cfg, "portfolio", "max_position_pct", default=default_max)
+
+    if method == "equal":
+        w = pd.Series(1.0 / len(vol), index=vol.index)
+    elif method == "vol_target":
+        target = get(cfg, "portfolio", "target_vol", default=0.15)
+        inv = target / vol.replace(0, np.nan)
+        w = inv / inv.sum()
+    else:  # risk_parity
+        inv = 1.0 / vol.replace(0, np.nan)
+        w = inv / inv.sum()
+
+    w = w.clip(upper=maxp)
+    # 迭代封顶：把超 maxp 部分反复重新分配给未封顶标的，收敛到和=1 且单标<=maxp
+    for _ in range(50):
+        w = w.clip(upper=maxp)
+        remaining = 1.0 - float(w.sum())
+        if remaining <= 1e-9:
+            break
+        sub = w < maxp
+        if not sub.any():
+            break
+        w[sub] = w[sub] + remaining * (w[sub] / w[sub].sum())
+    return w
+
+
 def _vol_stop(vol_series, sl_min: float, sl_max: float, mult: float) -> np.ndarray:
     """止损随年化波动率自适应：stop = clip(vol * mult, sl_min, sl_max)。"""
     v = pd.to_numeric(vol_series, errors="coerce") / 100.0
@@ -94,8 +134,10 @@ def _dedup_df(df: pd.DataFrame, fetcher: DataFetcher, cfg: dict, kind: str) -> p
 
 
 def apply_risk(stock_df: pd.DataFrame, etf_df: pd.DataFrame, cfg: dict) -> dict:
-    """给候选清单附加 position_pct / stop_loss_pct 列，并施加行业内上限。"""
-    rp = get(cfg, "risk", "max_position_pct", default=0.12)
+    """给候选清单附加 position_pct / stop_loss_pct 列，并施加行业内上限。
+    position_pct 由组合层优化（A3）计算，单标封顶见 portfolio.max_position_pct。
+    """
+    rp = get(cfg, "portfolio", "max_position_pct", default=get(cfg, "risk", "max_position_pct", default=0.12))
     sl_min = get(cfg, "risk", "min_stop_loss_pct", default=0.05)
     sl_max = get(cfg, "risk", "max_stop_loss_pct", default=0.15)
     sl_mult = get(cfg, "risk", "stop_vol_multiplier", default=0.5)
@@ -103,14 +145,14 @@ def apply_risk(stock_df: pd.DataFrame, etf_df: pd.DataFrame, cfg: dict) -> dict:
     out = {}
     if stock_df is not None and not stock_df.empty:
         s = _cap_by_industry(stock_df.copy(), max_per)
-        s["position_pct"] = recommend_position(s["score"], rp).round(4).values
+        s["position_pct"] = portfolio_weights(s["vol_60"], cfg, rp).round(4).values
         s["stop_loss_pct"] = _vol_stop(s["vol_60"], sl_min, sl_max, sl_mult)
         s = s.reset_index(drop=True)
         s["rank"] = s.index + 1
         out["stocks"] = s
     if etf_df is not None and not etf_df.empty:
         e = etf_df.copy()
-        e["position_pct"] = recommend_position(e["score"], rp).round(4).values
+        e["position_pct"] = portfolio_weights(e["vol_60"], cfg, rp).round(4).values
         e["stop_loss_pct"] = _vol_stop(e["vol_60"], sl_min, sl_max, sl_mult)
         e = e.reset_index(drop=True)
         e["rank"] = e.index + 1
@@ -130,11 +172,14 @@ def finalize(res: dict, cfg: dict, fetcher: DataFetcher | None = None) -> dict:
             out["stocks"] = _dedup_df(out["stocks"], fetcher, cfg, "stock")
         if "etfs" in out and not out["etfs"].empty:
             out["etfs"] = _dedup_df(out["etfs"], fetcher, cfg, "etf")
-        # 去重后重排 rank
+        # 去重后重排 rank，并重算组合权重（否则被剔除标的的权重会凭空丢失，合计 < 1）
+        rp2 = get(cfg, "portfolio", "max_position_pct", default=0.12)
         for k in ("stocks", "etfs"):
             if k in out and not out[k].empty:
                 out[k] = out[k].reset_index(drop=True)
                 out[k]["rank"] = out[k].index + 1
+                if "vol_60" in out[k].columns:
+                    out[k]["position_pct"] = portfolio_weights(out[k]["vol_60"], cfg, rp2).round(4).values
 
     scale, state = 1.0, "risk_on"
     if fetcher is not None and get(cfg, "regime", "enabled", default=True):
