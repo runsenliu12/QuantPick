@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  web:
+    build: .
+    container_name: quantpick
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.local.json:/app/config.local.json:ro
+      - ./data:/app/data
+    restart: unless-stopped
+    # 如需定时扫描而非常驻 Web，可注释上面的 ports/CMD 并改用：
+    # command: ["python", "scripts/daily_scan.py"]
