@@ -101,30 +101,59 @@ def score_universe(df: pd.DataFrame, cfg: dict, kind: str) -> pd.DataFrame:
     return df
 
 
+def compute_factor_rows(fetcher: DataFetcher, cfg: dict, kind: str) -> pd.DataFrame:
+    """构建原始因子表（打分前），供打分与覆盖率诊断共用。
+
+    与生产完全一致的取数与过滤：股票按市值/成交额门槛 + scan_count 截断，
+    ETF 按成交额/规模门槛。返回含全部因子列与 name 的 DataFrame（未排序、未截断 top_n）。
+    """
+    if kind == "stock":
+        uni = fetcher.get_stock_universe()
+        min_cap = get(cfg, "selection", "stock", "min_market_cap", default=5e9)
+        min_amt = get(cfg, "selection", "stock", "min_amount", default=5e7)
+        scan = get(cfg, "selection", "stock", "scan_count", default=200)
+        uni = uni[
+            (pd.to_numeric(uni["market_cap"], errors="coerce") >= min_cap)
+            & (pd.to_numeric(uni["amount"], errors="coerce") >= min_amt)
+        ]
+        uni = uni.sort_values("amount", ascending=False).head(scan)
+        rows = []
+        for code in uni["code"].astype(str):
+            try:
+                rows.append(factors.compute_stock_factors(fetcher, code))
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        df["name"] = df["code"].map(uni.set_index("code")["name"].to_dict())
+        return df
+    else:
+        uni = fetcher.get_etf_universe()
+        min_amt = get(cfg, "selection", "etf", "min_amount", default=5e7)
+        min_aum = get(cfg, "selection", "etf", "min_aum", default=5e8)
+        uni = uni[pd.to_numeric(uni["amount"], errors="coerce") >= min_amt]
+        rows = []
+        for _, row in uni.iterrows():
+            code = str(row["code"])
+            try:
+                rows.append(factors.compute_etf_factors(fetcher, code, row.to_dict()))
+            except Exception:
+                continue
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        if "aum" in df:
+            df = df[pd.to_numeric(df["aum"], errors="coerce") >= min_aum]
+        df["name"] = df["code"].map(uni.set_index("code")["name"].to_dict())
+        return df
+
+
 def rank_stocks(fetcher: DataFetcher, cfg: dict) -> pd.DataFrame:
-    uni = fetcher.get_stock_universe()
-    min_cap = get(cfg, "selection", "stock", "min_market_cap", default=5e9)
-    min_amt = get(cfg, "selection", "stock", "min_amount", default=5e7)
-    scan = get(cfg, "selection", "stock", "scan_count", default=200)
     top_n = get(cfg, "selection", "stock", "top_n", default=10)
-
-    uni = uni[
-        (pd.to_numeric(uni["market_cap"], errors="coerce") >= min_cap)
-        & (pd.to_numeric(uni["amount"], errors="coerce") >= min_amt)
-    ]
-    uni = uni.sort_values("amount", ascending=False).head(scan)
-
-    rows = []
-    for code in uni["code"].astype(str):
-        try:
-            rows.append(factors.compute_stock_factors(fetcher, code))
-        except Exception:
-            continue
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows)
-    df["name"] = df["code"].map(uni.set_index("code")["name"].to_dict())
+    df = compute_factor_rows(fetcher, cfg, "stock")
+    if df.empty:
+        return df
     df = score_universe(df, cfg, "stock")
     df = df.sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
     df["rank"] = df.index + 1
@@ -132,26 +161,10 @@ def rank_stocks(fetcher: DataFetcher, cfg: dict) -> pd.DataFrame:
 
 
 def rank_etfs(fetcher: DataFetcher, cfg: dict) -> pd.DataFrame:
-    uni = fetcher.get_etf_universe()
-    min_amt = get(cfg, "selection", "etf", "min_amount", default=5e7)
-    min_aum = get(cfg, "selection", "etf", "min_aum", default=5e8)
     top_n = get(cfg, "selection", "etf", "top_n", default=10)
-
-    uni = uni[pd.to_numeric(uni["amount"], errors="coerce") >= min_amt]
-    rows = []
-    for _, row in uni.iterrows():
-        code = str(row["code"])
-        try:
-            rows.append(factors.compute_etf_factors(fetcher, code, row.to_dict()))
-        except Exception:
-            continue
-    if not rows:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows)
-    if "aum" in df:
-        df = df[pd.to_numeric(df["aum"], errors="coerce") >= min_aum]
-    df["name"] = df["code"].map(uni.set_index("code")["name"].to_dict())
+    df = compute_factor_rows(fetcher, cfg, "etf")
+    if df.empty:
+        return df
     df = score_universe(df, cfg, "etf")
     df = df.sort_values("score", ascending=False).head(top_n).reset_index(drop=True)
     df["rank"] = df.index + 1
