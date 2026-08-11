@@ -7,6 +7,8 @@
 - 交易约束（A1）：建仓日涨停买不到、平仓日跌停卖不出、停牌顺延，均建模进回测。
 - 组合优化（A3）：权重用风险平价（∝1/波动率）而非近等权。
 - 换手控制（A2）：相邻调仓期限制被替换标的数量，降低摩擦成本。
+- 市场状态缩放（regime）：每个调仓日按指数 vs MA 决定仓位缩放，熊市留现金
+  （权重和<1），使回测不再"永远满仓"，与 finalize 实盘口径一致。
 - 含交易成本 + 基准(沪深300) + Sharpe/最大回撤/换手/IC，并做前后段(样本内/外)对比。
 
 用法：
@@ -26,7 +28,7 @@ import pandas as pd
 from src.config import load_config, get
 from src.selection import score_universe
 from src.data import DataFetcher
-from src.risk import portfolio_weights
+from src.risk import portfolio_weights, regime_scale
 from src.trading import is_limit_up, is_limit_down
 
 
@@ -63,9 +65,8 @@ def simulate_portfolio(ret_matrix: pd.DataFrame, weight_panel: pd.DataFrame,
                 for c in weights.index:
                     if weights[c] > 0 and eff[c] == 0 and bool(is_limit_down(lim.get(c), down)):
                         eff[c] = weights[c]
-            s = eff.sum()
-            if s > 0:
-                eff = eff / s
+            # 不做归一化：权重和 < 1 即代表持有现金（熊市缩放/涨停买不到的剩余部分），
+            # 现金按 0 收益计入净值，回测与实盘口径一致。
             turn = (eff - weights).abs().sum() / 2.0
             nav[-1] *= (1 - cost * turn)
             weights = eff
@@ -192,19 +193,34 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         }).T
         snap = snap.T
         snap = score_universe(snap, cfg, "stock")
+        snap = snap.reset_index()  # code 在 index 上 -> 转成列
+        snap = snap.rename(columns={snap.columns[0]: "code"})  # 统一列名为 code
         snap["date"] = d
-        score_rows.append(snap[["date", "score"]])
+        score_rows.append(snap[["date", "code", "score"]])
 
     if not score_rows:
         raise RuntimeError("未生成任何调仓期因子快照，检查历史长度。")
     score_panel = pd.concat(score_rows).pivot(index="date", columns="code", values="score")
 
-    # 日度收益与波动率面板
-    ret_matrix = close.pct_change().reindex(score_panel.index)
+    # 日度收益面板：保留全部交易日（从首个调仓日起），用于逐日持有模拟；
+    # 权重面板随后会 forward-fill 到这些交易日，而非仅在调仓日步进。
+    ret_matrix = close.pct_change().dropna()
     ret_matrix = ret_matrix[score_panel.columns]
+    ret_matrix = ret_matrix.loc[score_panel.index[0]:]  # 从首个调仓日开始
     vol_panel = ret_matrix.rolling(60).std() * np.sqrt(252) * 100.0  # 年化波动率(百分比)
 
-    # 每期目标权重（风险平价），应用 A2 换手控制
+    # 市场状态缩放：每个调仓日按指数 vs MA(ma_window) 决定仓位缩放（与 finalize 同口径）。
+    # 熊市 risk_off -> 把权重乘 risk_off_scale（如 0.3），权重和 < 1，回测据此持有现金，
+    # 避免"永远满仓"虚高收益，使回测与实盘口径一致。
+    regime_enabled = get(cfg, "regime", "enabled", default=True)
+    regime_close = None
+    if regime_enabled:
+        rg_idx = get(cfg, "regime", "index", default="000300")
+        rh = fetcher.get_index_hist(rg_idx)
+        if rh is not None and not rh.empty and "收盘" in rh.columns:
+            regime_close = pd.to_numeric(rh["收盘"], errors="coerce").dropna()
+
+    # 每期目标权重（风险平价），应用 A2 换手控制 与 市场状态缩放
     max_turn = get(cfg, "turnover", "max_turnover_pct", default=1.0)
     w_rows = []
     for d in score_panel.index:
@@ -222,6 +238,16 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         for k in range(1, len(weight_panel)):
             fixed.append(_cap_turnover_panel(weight_panel.iloc[k - 1], weight_panel.iloc[k], max_turn))
         weight_panel = pd.DataFrame(fixed, index=score_panel.index)
+    # 市场状态缩放：在 A2 换手控制之后施加，避免被归一化抹掉现金比例。
+    # 熊市 risk_off -> 权重乘 risk_off_scale（如 0.3），权重和 < 1 代表持有现金。
+    if regime_enabled and regime_close is not None:
+        scaled = []
+        for d in weight_panel.index:
+            w = weight_panel.loc[d]
+            if d in regime_close.index:
+                w = w * regime_scale(regime_close, cfg, as_of=d)
+            scaled.append(w)
+        weight_panel = pd.DataFrame(scaled, index=weight_panel.index)
     # forward-fill 到全部交易日
     weight_panel = weight_panel.reindex(ret_matrix.index).ffill().fillna(0.0)
 
