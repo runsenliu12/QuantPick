@@ -193,3 +193,27 @@ def finalize(res: dict, cfg: dict, fetcher: DataFetcher | None = None) -> dict:
                 out[k]["position_pct"] = (out[k]["position_pct"] * scale).round(4)
     out["regime"] = {"state": state, "scale": scale}
     return out
+
+
+def regime_scale(index_close: pd.Series, cfg: dict, as_of=None) -> float:
+    """按指数收盘序列返回仓位缩放系数，与 finalize 的市场状态口径一致。
+
+    index_close: 指数收盘价序列（DatetimeIndex）。
+    as_of: 若给定且存在于索引，则只取该日期及之前的数据（时点化，避免未来函数）。
+    返回 risk_on_scale(默认 1.0) 或 risk_off_scale(默认 0.3, 熊市留现金)；
+    数据不足时退化为 risk_on，保证回测早期不报错。
+    """
+    win = get(cfg, "regime", "ma_window", default=200)
+    on = get(cfg, "regime", "risk_on_scale", default=1.0)
+    off = get(cfg, "regime", "risk_off_scale", default=0.3)
+    if index_close is None or not len(index_close):
+        return on
+    s = index_close
+    if as_of is not None and as_of in s.index:
+        s = s.loc[:as_of]
+    s = pd.to_numeric(s, errors="coerce").dropna()
+    if len(s) < win:
+        return on
+    ma = s.rolling(win).mean().iloc[-1]
+    last = s.iloc[-1]
+    return on if last >= ma else off
