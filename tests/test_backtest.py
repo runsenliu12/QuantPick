@@ -53,3 +53,17 @@ def test_simulate_cost_reduces_nav():
     nav_no_cost = simulate_portfolio(ret, wp, None, 0.0)
     nav_cost = simulate_portfolio(ret, wp, None, 0.01)
     assert nav_cost.iloc[-1] <= nav_no_cost.iloc[-1]
+
+
+def test_simulate_regime_holds_cash():
+    cols = ["a", "b"]
+    # 两标的每天同涨 10%；满仓 vs 熊市只投 30%（其余持现金赚 0）
+    ret = _panel([[0.10, 0.10]] * 3, cols)
+    wp_on = _panel([[0.5, 0.5]] * 3, cols)     # 满仓，权重和=1
+    wp_off = _panel([[0.15, 0.15]] * 3, cols)  # 熊市缩放 0.3，权重和=0.3
+    nav_on = simulate_portfolio(ret, wp_on, None, 0.0)
+    nav_off = simulate_portfolio(ret, wp_off, None, 0.0)
+    # 不满仓（持有现金）终值显著低于满仓
+    assert nav_off.iloc[-1] < nav_on.iloc[-1]
+    # 关键：模拟不得把权重归一化回满仓；否则两者终值会相等
+    assert abs(nav_off.iloc[-1] - 1.03 ** 3) < 1e-9
