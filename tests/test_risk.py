@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-from src.risk import portfolio_weights
+from src.risk import portfolio_weights, regime_scale
 
 
 def test_risk_parity_low_vol_higher_weight():
@@ -37,3 +37,37 @@ def test_cap_sum_equals_one():
     w = portfolio_weights(vol, cfg)
     assert abs(w.sum() - 1.0) < 1e-9
     assert w.max() <= 0.12 + 1e-9
+
+
+def _idx(vals):
+    return pd.Series(vals, index=pd.date_range("2020-01-01", periods=len(vals)))
+
+
+def test_regime_scale_risk_on_when_above_ma():
+    cfg = {"regime": {"ma_window": 3, "risk_on_scale": 1.0, "risk_off_scale": 0.3}}
+    # 收盘价持续上行，最后一日高于 MA -> risk_on
+    close = _idx([10.0, 11.0, 12.0, 13.0, 14.0])
+    assert regime_scale(close, cfg) == 1.0
+
+
+def test_regime_scale_risk_off_when_below_ma():
+    cfg = {"regime": {"ma_window": 3, "risk_on_scale": 1.0, "risk_off_scale": 0.3}}
+    # 收盘价持续下行，最后一日低于 MA -> risk_off
+    close = _idx([14.0, 13.0, 12.0, 11.0, 10.0])
+    assert regime_scale(close, cfg) == 0.3
+
+
+def test_regime_scale_as_of_is_point_in_time():
+    cfg = {"regime": {"ma_window": 3, "risk_on_scale": 1.0, "risk_off_scale": 0.3}}
+    # 整体先跌后涨：在下跌段 as_of 应为 risk_off，末日整体又 risk_on
+    close = _idx([14.0, 13.0, 12.0, 11.0, 10.0, 13.0, 16.0])
+    d_off = close.index[4]   # 跌到最低点
+    d_on = close.index[-1]   # 反弹后
+    assert regime_scale(close, cfg, as_of=d_off) == 0.3
+    assert regime_scale(close, cfg, as_of=d_on) == 1.0
+
+
+def test_regime_scale_fallback_when_insufficient():
+    cfg = {"regime": {"ma_window": 200, "risk_on_scale": 1.0, "risk_off_scale": 0.3}}
+    close = _idx([10.0, 11.0, 12.0])  # 长度 < ma_window -> 退化为 risk_on
+    assert regime_scale(close, cfg) == 1.0
