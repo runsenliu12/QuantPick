@@ -272,12 +272,105 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         "in_sample": compute_metrics(nav.iloc[:half], bench_nav.iloc[:half] if bench_nav is not None else None),
         "out_sample": compute_metrics(nav.iloc[half:], bench_nav.iloc[half:] if bench_nav is not None else None),
     }
-    return {"nav": nav, "metrics": metrics, "segments": seg,
+    return {"nav": nav, "metrics": metrics, "segments": seg, "bench_nav": bench_nav,
             "bench_total_return": (bench_nav.iloc[-1] - 1) if bench_nav is not None else None}
+
+
+# ---------------- API 序列化与离线演示 ----------------
+
+def _clean_metrics(m: dict) -> dict:
+    out = {}
+    for k, v in m.items():
+        out[k] = round(float(v), 4) if isinstance(v, (int, float)) and v == v else v
+    return out
+
+
+def to_api_result(res: dict) -> dict:
+    """把 run_backtest 的返回整理成 API/前端友好的 JSON（净值转成 [i,value] 列表）。"""
+
+    def series_to_list(s):
+        if s is None:
+            return None
+        is_date = isinstance(s.index, pd.DatetimeIndex)
+        out = []
+        for i, (d, v) in enumerate(s.items()):
+            pt = {"i": i, "value": round(float(v), 6)}
+            if is_date:
+                pt["date"] = str(d) if hasattr(d, "strftime") else str(d)[:10]
+            out.append(pt)
+        return out
+
+    return {
+        "nav": series_to_list(res.get("nav")),
+        "bench_nav": series_to_list(res.get("bench_nav")),
+        "metrics": _clean_metrics(res.get("metrics", {})),
+        "segments": {k: _clean_metrics(v) for k, v in res.get("segments", {}).items()},
+        "bench_total_return": res.get("bench_total_return"),
+    }
+
+
+class _DemoFetcher:
+    """合成数据 fetcher：无需 AKShare / 网络，用于离线演示与自测。"""
+
+    def __init__(self, n_stocks: int = 12, n_days: int = 250, seed: int = 7):
+        self._rng = np.random.default_rng(seed)
+        self._dates = pd.date_range("2023-01-01", periods=n_days, freq="B")
+        self._codes = [f"C{i:03d}" for i in range(1, n_stocks + 1)]
+        self._close, self._fin = {}, {}
+        for code in self._codes:
+            r = self._rng.normal(0.0006, 0.02, n_days)
+            px = 10 * np.cumprod(1 + r)
+            self._close[code] = pd.Series(px, index=self._dates)
+            self._fin[code] = {
+                "roe": float(self._rng.uniform(0.05, 0.25)),
+                "debt_ratio": float(self._rng.uniform(0.2, 0.7)),
+                "pe": float(self._rng.uniform(8, 40)),
+                "pb": float(self._rng.uniform(0.8, 5)),
+                "dividend_yield": float(self._rng.uniform(0.0, 0.04)),
+            }
+        # 指数：先涨后跌，制造一段 risk_off，使 regime 缩放有可见效果
+        idx = np.concatenate([np.linspace(3000, 3400, n_days - 60),
+                              np.linspace(3400, 2900, 60)])
+        self._index = pd.Series(idx, index=self._dates)
+
+    def get_stock_universe(self):
+        return pd.DataFrame({
+            "code": self._codes,
+            "name": [f"演示股{i}" for i in range(1, len(self._codes) + 1)],
+            "market_cap": [1e10] * len(self._codes),
+            "amount": [1e9] * len(self._codes),
+        })
+
+    def get_stock_hist(self, code):
+        code = str(code)
+        if code not in self._close:
+            return pd.DataFrame()
+        s = self._close[code]
+        df = pd.DataFrame({"收盘": s})
+        df["涨跌幅"] = s.pct_change().fillna(0.0) * 100.0
+        return df
+
+    def get_index_hist(self, sym=None):
+        return pd.DataFrame({"收盘": self._index})
+
+    def get_stock_financials(self, code):
+        return self._fin.get(str(code), {})
+
+    def close(self):
+        pass
+
+
+def demo_backtest(cfg: dict | None = None, **kw) -> dict:
+    """用合成数据跑一次回测，返回 run_backtest 原始结果（离线演示/自测用）。"""
+    if cfg is None:
+        cfg = load_config()
+    return run_backtest(_DemoFetcher(), cfg, **kw)
 
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--demo", action="store_true",
+                    help="用合成数据离线演示回测（无需 AKShare / 网络），适合自测与展示")
     ap.add_argument("--pool", type=int, default=80)
     ap.add_argument("--lookback", type=int, default=60)
     ap.add_argument("--hold", type=int, default=20)
@@ -285,16 +378,21 @@ def main():
     ap.add_argument("--rebalance", type=int, default=21)
     ap.add_argument("--cost", type=float, default=0.001)
     ap.add_argument("--benchmark", type=str, default="000300")
+    ap.add_argument("--out", type=str, default=None,
+                    help="把回测结果写成 JSON（API 友好格式），便于前端消费")
     args = ap.parse_args()
 
     cfg = load_config()
-    fetcher = DataFetcher(sqlite_path=get(cfg, "data", "sqlite_path", default="data/quantpick.db"))
+    if args.demo:
+        f = _DemoFetcher()
+    else:
+        f = DataFetcher(sqlite_path=get(cfg, "data", "sqlite_path", default="data/quantpick.db"))
     try:
-        res = run_backtest(fetcher, cfg, pool=args.pool, lookback=args.lookback,
+        res = run_backtest(f, cfg, pool=args.pool, lookback=args.lookback,
                            hold=args.hold, top_n=args.top, rebalance=args.rebalance,
                            cost=args.cost, benchmark=args.benchmark)
     finally:
-        fetcher.close()
+        f.close()
 
     m = res["metrics"]
     print("=== 策略指标 ===")
@@ -304,6 +402,12 @@ def main():
     for seg, sm in res["segments"].items():
         print(f"  [{seg}] total={sm.get('total_return',0):.2%} sharpe={sm.get('sharpe',0):.2f} mdd={sm.get('max_drawdown',0):.2%}")
     print(f"基准(沪深300)总收益: {res['bench_total_return']:.2%}" if res['bench_total_return'] is not None else "基准: 无")
+
+    if args.out:
+        import json as _json
+        with open(args.out, "w", encoding="utf-8") as fh:
+            _json.dump(to_api_result(res), fh, ensure_ascii=False, indent=2)
+        print(f"\n已写出 API 结果 -> {args.out}")
 
 
 if __name__ == "__main__":
