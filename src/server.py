@@ -100,6 +100,43 @@ def health():
     return jsonify({"status": "ok"})
 
 
+_backtest_cache = {"ts": 0.0, "_key": None, "data": None}
+_BACKTEST_TTL = 3600  # 回测较重，缓存 1 小时
+
+
+def get_backtest(force: bool = False, demo: bool = False) -> dict:
+    now = time.time()
+    key = "demo" if demo else "real"
+    if not force and _backtest_cache["_key"] == key and _backtest_cache["data"] \
+            and now - _backtest_cache["ts"] < _BACKTEST_TTL:
+        return _backtest_cache["data"]
+    # 懒导入，避免在未装 scripts 依赖时拖垮整个服务启动
+    from scripts.backtest import run_backtest, to_api_result, _DemoFetcher
+
+    cfg = load_config()
+    if demo:
+        fetcher = _DemoFetcher()
+    else:
+        db = get(cfg, "data", "sqlite_path", default="data/quantpick.db")
+        fetcher = DataFetcher(sqlite_path=db,
+                              cache_days=get(cfg, "data", "cache_days", default=1))
+    try:
+        res = run_backtest(fetcher, cfg)
+    except Exception as e:  # 真实数据缺失/接口异常时优雅降级
+        return {"empty": True, "message": f"回测暂不可用：{e}（可尝试 /api/backtest?demo=1 看演示）"}
+    finally:
+        fetcher.close()
+    out = to_api_result(res)
+    _backtest_cache.update({"ts": now, "_key": key, "data": out})
+    return out
+
+
+@app.route("/api/backtest")
+def api_backtest():
+    demo = request.args.get("demo") == "1"
+    return jsonify(get_backtest(force=request.args.get("force") == "1", demo=demo))
+
+
 if __name__ == "__main__":
     cfg = load_config()
     host = get(cfg, "server", "host", default="0.0.0.0")
