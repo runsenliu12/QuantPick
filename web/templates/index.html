@@ -174,6 +174,17 @@
     <div class="note" id="perf-note"></div>
   </div>
 
+  <!-- 历史回测净值 -->
+  <div class="card">
+    <h2>📉 历史回测净值 <span class="tag">策略 vs 沪深300</span></h2>
+    <div class="card" style="background:var(--bg);border:none;padding:8px">
+      <svg id="btChart" viewBox="0 0 680 220" width="100%" height="220" preserveAspectRatio="none"></svg>
+      <div class="note" id="btLegend"></div>
+    </div>
+    <div id="bt-cards" class="grid" style="margin-top:12px"></div>
+    <div class="note" id="bt-note"></div>
+  </div>
+
   <footer>策略参数来自 config.json；候选数据需服务器连通行情接口后生成。QuantPick · 量化研究工具。</footer>
 </div>
 
@@ -274,6 +285,70 @@ async function load(force){
     render("tbl-hist", hd || [], HIST_COLS);
   } catch(e){}
   loadPerf();
+  loadBacktest();
+}
+
+function drawBacktestNav(d){
+  const svg = document.getElementById("btChart");
+  const s = (d.nav||[]).map(p=>p.value);
+  const b = (d.bench_nav||[]).map(p=>p.value);
+  if (!s.length){ svg.innerHTML = '<text x="20" y="40" fill="#8a9099">暂无净值数据</text>'; return; }
+  const W=680, H=220, pad=34;
+  const all = s.concat(b).filter(x=>x!=null);
+  const min=Math.min(...all), max=Math.max(...all);
+  const n = s.length;
+  const x = i => pad + (W-2*pad) * (n>1 ? i/(n-1) : 0);
+  const y = v => H-pad - (H-2*pad) * ((v-min)/((max-min)||1));
+  const path = arr => arr.map((v,i)=> (i?"L":"M")+x(i).toFixed(1)+" "+y(v).toFixed(1)).join(" ");
+  const y1 = y(1.0);
+  svg.innerHTML =
+    `<line x1="${pad}" y1="${y1.toFixed(1)}" x2="${W-pad}" y2="${y1.toFixed(1)}" stroke="#e6e8eb" stroke-dasharray="4 4"/>`+
+    (b.length ? `<path d="${path(b)}" fill="none" stroke="#8a9099" stroke-width="1.5"/>` : "")+
+    `<path d="${path(s)}" fill="none" stroke="#2b6de4" stroke-width="2.5"/>`+
+    `<text x="${pad}" y="16" fill="#2b6de4" font-size="12" font-weight="600">策略</text>`+
+    (b.length ? `<text x="${pad+38}" y="16" fill="#8a9099" font-size="12">基准</text>` : "");
+  document.getElementById("btLegend").textContent =
+    `策略净值 1.0 → ${s[s.length-1].toFixed(3)}；基准 → ${b.length ? b[b.length-1].toFixed(3) : "-"}。横轴为回测交易日，单位净值（前复权）。`;
+}
+
+async function loadBacktest(){
+  try {
+    let r = await fetch("/api/backtest");
+    let d = await r.json();
+    let isDemo = false;
+    if (d.empty){  // 真实数据缺失时自动回退到合成演示，保证面板始终有内容
+      r = await fetch("/api/backtest?demo=1");
+      d = await r.json();
+      isDemo = true;
+    }
+    if (d.empty){
+      document.getElementById("btChart").innerHTML = '<text x="20" y="40" fill="#8a9099">'+(d.message||"暂无回测数据")+'</text>';
+      document.getElementById("btLegend").textContent = "";
+      document.getElementById("bt-cards").innerHTML = "";
+      return;
+    }
+    drawBacktestNav(d);
+    const m = d.metrics||{};
+    const cards = [
+      ["策略总收益", (m.total_return*100).toFixed(1)+"%", m.total_return>=0],
+      ["基准总收益", (m.bench_total_return!=null ? (m.bench_total_return*100).toFixed(1)+"%" : "-"), m.bench_total_return>=0],
+      ["Sharpe", (m.sharpe!=null?m.sharpe.toFixed(2):"-"), null],
+      ["最大回撤", (m.max_drawdown*100).toFixed(1)+"%", "neg"],
+    ];
+    document.getElementById("bt-cards").innerHTML = cards.map(c=>{
+      const cls = c[2]===true?"pos":c[2]===false?"neg":(c[2]==="neg"?"neg":"");
+      return `<div class="card" style="margin:0"><div style="font-size:12px;color:var(--muted)">${c[0]}</div><div style="font-size:20px;font-weight:600;margin-top:4px" class="${cls}">${c[1]}</div></div>`;
+    }).join("");
+    const seg = d.segments||{};
+    let segTxt = "";
+    if (seg.in_sample) segTxt += `样本内 总收益 ${(seg.in_sample.total_return*100).toFixed(1)}% / Sharpe ${seg.in_sample.sharpe.toFixed(2)}；`;
+    if (seg.out_sample) segTxt += `样本外 总收益 ${(seg.out_sample.total_return*100).toFixed(1)}% / Sharpe ${seg.out_sample.sharpe.toFixed(2)}`;
+    document.getElementById("bt-note").textContent =
+      segTxt + (isDemo ? "（当前为合成演示数据，运行真实回测后显示实盘结果）" : "") +
+      " 回测为历史验证，非未来收益保证。";
+  } catch(e){
+    document.getElementById("btChart").innerHTML = '<text x="20" y="40" fill="#8a9099">回测加载失败</text>';
+  }
 }
 
 function drawNav(nav){
