@@ -31,6 +31,7 @@ QuantPick 是一个聚焦 A 股、同时覆盖**股票与场内 ETF** 的量化�
 - **Web 看板**：`/api/candidates` 提供 JSON，页面自动刷新展示候选
 - **定时推送**：交易日收盘后自动扫描，结果推送飞书/企微
 - **回测验证**：内置动量因子 IC / ICIR / 净值演示，验证因子有效性
+- **历史回测净值看板**：页面 "📉 历史回测净值" 展示策略 vs 沪深300 的净值曲线、Sharpe / 最大回撤 / 样本内·外分段，且**无需行情密钥即可用合成数据演示**（`--demo`）
 - **一键部署**：Docker / docker-compose 打包，服务器常驻
 
 ## 📁 目录结构
@@ -76,7 +77,12 @@ python -m src.server
 
 # 或跑一次每日扫描（交易日 15:30 后）
 python scripts/daily_scan.py
+
+# 跑一次历史回测（需连通行情接口）；加 --demo 用合成数据离线演示，无需密钥
+python scripts/backtest.py --demo --out backtest_result.json
 ```
+
+> 回测结果可用 `--out backtest_result.json` 导出为 API 友好 JSON，供 Web 看板 `/api/backtest` 消费；看板在真实数据缺失时也会自动回退到合成演示，保证面板始终有内容。
 
 ## 🐳 Docker 部署（推荐服务器）
 
@@ -137,10 +143,11 @@ chmod +x docker-deploy.sh
 
 ## 🗺️ 路线图
 
+- [x] 历史回测净值曲线看板 + 离线 `--demo` 演示模式（无需密钥即可跑通展示）
 - [ ] ETF 折溢价（IOPV/净值）精确接入
 - [ ] 美股 ETF（yfinance）扩展
 - [ ] 实盘下单接口（需对接券商 API，谨慎）
-- [ ] 因子表现监控面板
+- [ ] 因子表现监控面板（IC / ICIR 滚动）
 - [ ] 微信推送（除企微外）
 
 ---
