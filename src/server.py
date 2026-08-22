@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import time
+import logging
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
@@ -21,6 +22,7 @@ from src.performance import compute_performance
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 app = Flask(__name__, template_folder=os.path.join(_ROOT, "web", "templates"))
 CORS(app)
+logger = logging.getLogger("quantpick.server")
 
 _cache = {"ts": 0.0, "data": None}
 _TTL = 300  # 秒
@@ -156,6 +158,31 @@ def get_ic() -> dict:
 @app.route("/api/ic")
 def api_ic():
     return jsonify(get_ic())
+
+
+def get_us_etf(demo: bool = False) -> dict:
+    cfg = load_config()
+    if get(cfg, "us_etf", "enabled", default=False) and not demo:
+        df = _us_etf_rank(cfg, demo=False)
+        if df is not None and not df.empty:
+            return {"source": "real", "rows": df.to_dict(orient="records")}
+    df = _us_etf_rank(cfg, demo=True)
+    return {"source": "demo", "rows": (df.to_dict(orient="records") if df is not None else [])}
+
+
+def _us_etf_rank(cfg: dict, demo: bool):
+    from src import us_etf as ue
+    try:
+        return ue.rank_us_etfs(cfg, demo=demo)
+    except Exception as e:
+        logger.warning("美股 ETF 计算失败: %s", e)
+        return None
+
+
+@app.route("/api/us_etf")
+def api_us_etf():
+    demo = request.args.get("demo") == "1"
+    return jsonify(get_us_etf(demo=demo))
 
 
 if __name__ == "__main__":
