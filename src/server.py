@@ -137,6 +137,27 @@ def api_backtest():
     return jsonify(get_backtest(force=request.args.get("force") == "1", demo=demo))
 
 
+_ic_cache = {"ts": 0.0, "data": None}
+_IC_TTL = 3600
+
+
+def get_ic() -> dict:
+    now = time.time()
+    if _ic_cache["data"] and now - _ic_cache["ts"] < _IC_TTL:
+        return _ic_cache["data"]
+    # 懒导入；当前因子历史未落库，使用带已知关系的合成数据演示 IC/ICIR。
+    from src.ic import demo_ic, report
+    panels, fwd = demo_ic()
+    out = report(panels, fwd)
+    _ic_cache.update({"ts": now, "data": out})
+    return out
+
+
+@app.route("/api/ic")
+def api_ic():
+    return jsonify(get_ic())
+
+
 if __name__ == "__main__":
     cfg = load_config()
     host = get(cfg, "server", "host", default="0.0.0.0")
