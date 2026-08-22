@@ -21,6 +21,7 @@ def _yi(x):
 
 FACTOR_NAMES = {
     "momentum": "动量", "quality": "质量", "value": "估值", "fund_flow": "资金流",
+    "size": "规模", "reversal": "反转", "industry_momentum": "行业动量",
     "scale": "规模", "liquidity": "流动性", "premium": "折溢价",
     "tracking_error": "跟踪误差", "expense": "管理费",
 }
@@ -29,6 +30,9 @@ FACTOR_DESC = {
     "quality": "ROE 与负债率，偏好盈利质量高、杠杆低。",
     "value": "PE/PB/股息率综合，行业内中性化后选低估。",
     "fund_flow": "主力资金净流入，衡量资金偏好方向。",
+    "size": "总市值对数，偏好小市值（规模溢价）。数据缺失时退化为中性。",
+    "reversal": "近 5 日收益取反，捕捉短期反转（跌多反弹）。",
+    "industry_momentum": "行业内 60 日收益均值，捕捉行业轮动 β。",
     "scale": "ETF 规模（AUM），偏好规模大、不易清盘。",
     "liquidity": "成交额，偏好流动性好、冲击成本低。",
     "premium": "折溢价率，偏好贴近净值（溢价容忍 ±1%）。",
