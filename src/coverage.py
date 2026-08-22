@@ -20,7 +20,8 @@ from src import selection
 
 # 生产中真正参与打分的关键因子（顺序即展示顺序）
 STOCK_FACTORS = [
-    "ret_20", "ret_60", "vol_60",
+    "ret_5", "ret_20", "ret_60", "vol_60",
+    "market_cap",
     "roe", "debt_ratio",
     "pe", "pb", "dividend_yield",
     "fund_flow_5", "fund_flow_20",
