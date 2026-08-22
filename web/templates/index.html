@@ -53,6 +53,27 @@
   .hero-sub { color:var(--muted); font-size:13px; margin:6px 0 0; }
   .empty { text-align:center; color:var(--muted); padding:18px 0; }
   footer { color:var(--muted); font-size:12px; text-align:center; padding:10px 0 30px; }
+  /* 行情抽屉 */
+  .code-link { color:var(--accent); cursor:pointer; text-decoration:none; font-weight:600; }
+  .code-link:hover { text-decoration:underline; }
+  .drawer-mask { position:fixed; inset:0; background:rgba(0,0,0,.32); display:none; z-index:50; }
+  .drawer-mask.open { display:block; }
+  .drawer { position:fixed; top:0; right:0; height:100%; width:min(720px,92vw); background:var(--card);
+            box-shadow:-8px 0 30px rgba(0,0,0,.18); transform:translateX(100%); transition:transform .22s ease;
+            z-index:51; display:flex; flex-direction:column; }
+  .drawer.open { transform:translateX(0); }
+  .drawer header { display:flex; align-items:center; justify-content:space-between; padding:14px 18px; border-bottom:1px solid var(--line); }
+  .drawer header .title { font-size:15px; font-weight:600; }
+  .drawer header .sub { color:var(--muted); font-size:12px; margin-left:8px; }
+  .drawer .close { border:none; background:none; font-size:22px; cursor:pointer; color:var(--muted); line-height:1; }
+  .drawer .body { padding:14px 18px; overflow:auto; }
+  .quote-summary { display:flex; flex-wrap:wrap; gap:8px 18px; margin-bottom:10px; font-size:13px; }
+  .quote-summary .q { color:var(--muted); }
+  .quote-summary .q b { color:var(--ink); font-weight:600; margin-left:4px; font-variant-numeric:tabular-nums; }
+  .drawer svg { width:100%; display:block; background:var(--bg); border-radius:8px; }
+  .drawer .legend { font-size:12px; color:var(--muted); margin:6px 0 12px; display:flex; gap:14px; flex-wrap:wrap; }
+  .drawer .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:4px; }
+  .drawer .note { color:var(--muted); font-size:12px; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -209,6 +230,26 @@
   <footer>策略参数来自 config.json；候选数据需服务器连通行情接口后生成。QuantPick · 量化研究工具。</footer>
 </div>
 
+<!-- 行情抽屉 -->
+<div class="drawer-mask" id="drawerMask" onclick="closeQuote()"></div>
+<aside class="drawer" id="drawer">
+  <header>
+    <div><span class="title" id="q-title">行情</span><span class="sub" id="q-sub"></span></div>
+    <button class="close" onclick="closeQuote()">×</button>
+  </header>
+  <div class="body">
+    <div class="quote-summary" id="q-summary"></div>
+    <div class="legend">
+      <span><i style="background:#2b6de4"></i>收盘</span>
+      <span><i style="background:#e08a00"></i>MA20</span>
+      <span><i style="background:#9b59b6"></i>MA60</span>
+      <span><i style="background:#cfd6dd"></i>成交量</span>
+    </div>
+    <svg id="klineChart" viewBox="0 0 720 300" preserveAspectRatio="none"></svg>
+    <div class="note" id="q-note"></div>
+  </div>
+</aside>
+
 <script>
 const STOCK_COLS = [
   ["rank","排名"],["code","代码"],["name","名称"],["score","分数"],
@@ -278,7 +319,7 @@ function attributionBars(r){
   }).join("") + '</div>';
 }
 
-function render(tableId, rows, cols){
+function render(tableId, rows, cols, kind){
   const tbl = document.getElementById(tableId);
   if (!rows.length){
     tbl.innerHTML = '<tbody><tr><td colspan="'+cols.length+'" class="empty">暂无数据（请确认服务器可访问行情接口，并先运行 scripts/daily_scan.py 或触发刷新）</td></tr></tbody>';
@@ -289,6 +330,10 @@ function render(tableId, rows, cols){
     return "<tr>" + cols.map(c=>{
       if (c[0]==="attr") return `<td class="attr">${attributionBars(r)}</td>`;
       let val = r[c[0]];
+      if (c[0]==="code" && kind){
+        const nm = r.name ? `（${r.name}）` : "";
+        return `<td><a class="code-link" onclick="openQuote('${String(val)}','${kind}')">${val}</a>${nm}</td>`;
+      }
       if (c[0]==="position_pct" || c[0]==="stop_loss_pct") val = fmt(val, true);
       else if (["score","ret_20","ret_60","vol_60"].includes(c[0])) val = fmt(val, false);
       else if (c[0]==="kind") val = val==="stock"?"股票":"ETF";
@@ -337,8 +382,8 @@ async function load(force){
   try {
     const r = await fetch("/api/candidates" + (force ? "?force=1" : ""));
     const d = await r.json();
-    render("tbl-stock", d.stocks || [], STOCK_COLS);
-    render("tbl-etf", d.etfs || [], ETF_COLS);
+    render("tbl-stock", d.stocks || [], STOCK_COLS, "stock");
+    render("tbl-etf", d.etfs || [], ETF_COLS, "etf");
     const rg = d.regime || {state:"risk_on", scale:1.0};
     const badge = document.getElementById("regime");
     badge.textContent = "市场: " + rg.state + " (缩放 " + rg.scale + ")";
@@ -362,7 +407,7 @@ async function loadUsEtf(){
   try {
     const r = await fetch("/api/us_etf");
     const d = await r.json();
-    render("tbl-us-etf", d.rows || [], US_ETF_COLS);
+    render("tbl-us-etf", d.rows || [], US_ETF_COLS, "us_etf");
     const src = document.getElementById("us-etf-src");
     if (src) src.textContent = d.source === "real" ? "（实时）" : "（演示）";
   } catch(e){
@@ -493,6 +538,93 @@ async function loadPerf(){
 }
 load(false);
 setInterval(()=>load(false), 300000);
+
+// ---------- 行情抽屉 ----------
+function openQuote(code, kind){
+  const dk = kind === "us_etf" ? "etf" : kind;  // 美股 ETF 复用 etf 行情口径
+  document.getElementById("drawer").classList.add("open");
+  document.getElementById("drawerMask").classList.add("open");
+  document.getElementById("q-title").textContent = code;
+  document.getElementById("q-sub").textContent = "加载行情中…";
+  document.getElementById("q-summary").innerHTML = "";
+  fetch("/api/quote?code=" + encodeURIComponent(code) + "&kind=" + dk + "&n=120")
+    .then(x=>x.json())
+    .then(d=>{
+      if (d.error){ document.getElementById("q-sub").textContent = d.error; return; }
+      const rows = d.rows || [];
+      document.getElementById("q-sub").textContent =
+        (d.source === "demo" ? "演示数据" : "实时行情") + " · 近 " + rows.length + " 日";
+      drawKline(rows);
+      document.getElementById("q-note").textContent = d.source === "demo"
+        ? "当前为合成演示 K 线（服务器未取到真实行情）。配置 AKShare/数据源并运行 daily_scan 后显示真实数据。"
+        : "行情为前复权日线，仅供研究参考，非买卖建议。";
+    })
+    .catch(e=>{ document.getElementById("q-sub").textContent = "加载失败：" + e.message; });
+}
+function closeQuote(){
+  document.getElementById("drawer").classList.remove("open");
+  document.getElementById("drawerMask").classList.remove("open");
+}
+
+function drawKline(rows){
+  const svg = document.getElementById("klineChart");
+  if (!rows.length){ svg.innerHTML = '<text x="20" y="40" fill="#8a9099">暂无行情</text>'; return; }
+  const W=720, H=300, padL=8, padR=8, padT=10, padB=46;
+  const plotW = W - padL - padR;
+  const priceH = H - padT - padB - 60;       // 价格区高度（下方留成交量 60px）
+  const volTop = padT + priceH + 14;
+  const volH = 46;
+  const closes = rows.map(r=>r.close);
+  const hi = Math.max(...rows.map(r=>r.high));
+  const lo = Math.min(...rows.map(r=>r.low));
+  const maxV = Math.max(...rows.map(r=>r.volume)) || 1;
+  const n = rows.length;
+  const x = i => padL + plotW * (n>1 ? i/(n-1) : 0);
+  const yP = v => padT + priceH - priceH * ((v-lo)/((hi-lo)||1));
+  const yV = v => volTop + volH - volH * (v/maxV);
+  const ma = (arr, win) => arr.map((_,i)=> i>=win-1 ? arr.slice(i-win+1,i+1).reduce((a,b)=>a+b,0)/win : null);
+  const ma20 = ma(closes, 20), ma60 = ma(closes, 60);
+  const cw = Math.max(1.5, plotW/n * 0.62);  // K 线实体宽度
+  let s = "";
+  // 网格 + 坐标
+  s += `<line x1="${padL}" y1="${padT+priceH}" x2="${W-padR}" y2="${padT+priceH}" stroke="#e6e8eb"/>`;
+  [0.25,0.5,0.75].forEach(f=>{
+    const yy = padT + priceH*f;
+    s += `<line x1="${padL}" y1="${yy}" x2="${W-padR}" y2="${yy}" stroke="#f0f2f4"/>`;
+  });
+  // K 线
+  rows.forEach((r,i)=>{
+    const up = r.close >= r.open;
+    const col = up ? "#e23b3b" : "#1aa260";  // A股习惯：涨红跌绿
+    const xc = x(i);
+    s += `<line x1="${xc.toFixed(1)}" y1="${yP(r.high).toFixed(1)}" x2="${xc.toFixed(1)}" y2="${yP(r.low).toFixed(1)}" stroke="${col}" stroke-width="1"/>`;
+    const yo=yP(r.open), yc=yP(r.close);
+    const top=Math.min(yo,yc), hgt=Math.max(1, Math.abs(yo-yc));
+    s += `<rect x="${(xc-cw/2).toFixed(1)}" y="${top.toFixed(1)}" width="${cw.toFixed(1)}" height="${hgt.toFixed(1)}" fill="${col}"/>`;
+    // 成交量
+    s += `<rect x="${(xc-cw/2).toFixed(1)}" y="${yV(r.volume).toFixed(1)}" width="${cw.toFixed(1)}" height="${(volTop+volH-yV(r.volume)).toFixed(1)}" fill="${up?'#f3b7b7':'#a9dcc2'}" opacity="0.8"/>`;
+  });
+  // 均线
+  const linePath = (arr,color)=>{
+    let p="", started=false;
+    arr.forEach((v,i)=>{ if(v==null){return;} const px=x(i).toFixed(1), py=yP(v).toFixed(1); p += (started?"L":"M")+px+" "+py+" "; started=true; });
+    return p ? `<path d="${p}" fill="none" stroke="${color}" stroke-width="1.6"/>` : "";
+  };
+  s += linePath(ma20, "#e08a00") + linePath(ma60, "#9b59b6");
+  // 概要
+  const first=closes[0], last=closes[n-1];
+  const chg=(last/first-1)*100;
+  const amp=(hi/lo-1)*100;
+  const lastV=rows[n-1].volume;
+  document.getElementById("q-summary").innerHTML =
+    `<span class="q">最新<b>${last.toFixed(2)}</b></span>`
+    + `<span class="q">区间涨跌<b class="${chg>=0?'pos':'neg'}">${chg>=0?'+':''}${chg.toFixed(1)}%</b></span>`
+    + `<span class="q">振幅<b>${amp.toFixed(1)}%</b></span>`
+    + `<span class="q">最高<b>${hi.toFixed(2)}</b></span>`
+    + `<span class="q">最低<b>${lo.toFixed(2)}</b></span>`
+    + `<span class="q">末日量<b>${(lastV/1e8).toFixed(2)}亿</b></span>`;
+  svg.innerHTML = s;
+}
 </script>
 </body>
 </html>
