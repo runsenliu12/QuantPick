@@ -74,9 +74,22 @@
   .drawer .legend { font-size:12px; color:var(--muted); margin:6px 0 12px; display:flex; gap:14px; flex-wrap:wrap; }
   .drawer .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:4px; }
   .drawer .note { color:var(--muted); font-size:12px; margin-top:6px; }
+  /* 跨页面导航 */
+  nav.topnav { background:var(--card); border-bottom:1px solid var(--line); padding:0 16px; display:flex; gap:2px; flex-wrap:wrap; position:sticky; top:0; z-index:40; }
+  nav.topnav a { text-decoration:none; color:var(--muted); font-size:13px; padding:11px 14px; border-bottom:2px solid transparent; }
+  nav.topnav a:hover { color:var(--accent); }
+  nav.topnav a.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
 </style>
 </head>
 <body>
+<nav class="topnav">
+  <a href="/" class="active">🏠 总览</a>
+  <a href="/backtest">📉 回测</a>
+  <a href="/factors">📊 因子</a>
+  <a href="/us-etf">🌎 美股ETF</a>
+  <a href="/methodology">⚙️ 方法论</a>
+</nav>
+
 <header>
   <h1>📊 QuantPick · 股 + ETF 智能精选</h1>
   <div class="meta">
