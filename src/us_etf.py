@@ -95,7 +95,7 @@ def _zscore(s: pd.Series) -> pd.Series:
 
 
 def _score(df: pd.DataFrame, cfg: dict) -> pd.Series:
-    """与 A 股 ETF 同思路的线性加权（z-score 后合成），但用美股可得因子。"""
+    """与 A 股 ETF 同思路的线性加权（z-score 后合成），并产出 c_* 因子贡献列。"""
     w = get(cfg, "us_etf", "weights", default=DEFAULT_WEIGHTS) or DEFAULT_WEIGHTS
     mom = 0.5 * _zscore(df["ret_20"]) + 0.5 * _zscore(df["ret_60"].fillna(df["ret_20"]))
     liq = _zscore(df["amount"].fillna(0))
@@ -110,8 +110,11 @@ def _score(df: pd.DataFrame, cfg: dict) -> pd.Series:
         "premium": prem,
         "expense": exp,
     }
-    score = sum(float(w.get(k, 0)) * comps[k] for k in comps)
-    return score - score.mean()  # 居中，便于跨期对比
+    score = pd.Series(0.0, index=df.index)
+    for k, c in comps.items():
+        df[f"c_{k}"] = (float(w.get(k, 0)) * c.fillna(0.0)).round(4)
+        score = score + df[f"c_{k}"]
+    return (score - score.mean()).round(4)  # 居中，便于跨期对比
 
 
 def _finalize_us(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
