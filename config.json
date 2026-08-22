@@ -19,10 +19,13 @@
   "models": {
     "active_selection_model": "multi_factor_v1",
     "stock_weights": {
-      "momentum": 0.30,
-      "quality": 0.25,
-      "value": 0.25,
-      "fund_flow": 0.20
+      "momentum": 0.25,
+      "quality": 0.20,
+      "value": 0.20,
+      "fund_flow": 0.15,
+      "size": 0.08,
+      "reversal": 0.07,
+      "industry_momentum": 0.05
     },
     "etf_weights": {
       "scale": 0.15,
@@ -87,6 +90,18 @@
   "performance": {
     "horizons": [5, 20, 60],
     "note": "纸上交易对账的持有期（交易日）。"
+  },
+  "us_etf": {
+    "enabled": false,
+    "symbols": ["SPY", "QQQ", "IWM", "VTI", "GLD", "TLT", "ARKK", "VNQ", "EEM", "XLF"],
+    "top_n": 5,
+    "weights": {
+      "momentum": 0.35,
+      "liquidity": 0.20,
+      "scale": 0.15,
+      "premium": 0.10,
+      "expense": 0.20
+    }
   },
   "network": {
     "timeouts": {
