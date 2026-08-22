@@ -69,6 +69,27 @@ def api_strategy():
     return jsonify(build_strategy(load_config()))
 
 
+# ---- 独立专题页路由（复用 /api/* 数据，不新增后端逻辑）----
+@app.route("/backtest")
+def page_backtest():
+    return render_template("backtest.html")
+
+
+@app.route("/factors")
+def page_factors():
+    return render_template("factors.html", strategy=build_strategy(load_config()))
+
+
+@app.route("/us-etf")
+def page_us_etf():
+    return render_template("us_etf.html")
+
+
+@app.route("/methodology")
+def page_methodology():
+    return render_template("methodology.html", strategy=build_strategy(load_config()))
+
+
 @app.route("/api/candidates")
 def api_candidates():
     return jsonify(get_candidates(force=request.args.get("force") == "1"))
