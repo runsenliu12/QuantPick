@@ -58,7 +58,9 @@ def score_universe(df: pd.DataFrame, cfg: dict, kind: str) -> pd.DataFrame:
 
     if kind == "stock":
         w = get(cfg, "models", "stock_weights",
-                default={"momentum": 0.30, "quality": 0.25, "value": 0.25, "fund_flow": 0.20})
+                default={"momentum": 0.25, "quality": 0.20, "value": 0.20,
+                         "fund_flow": 0.15, "size": 0.08, "reversal": 0.07,
+                         "industry_momentum": 0.05})
         # 动量
         mom = 0.5 * zscore(df["ret_20"]) + 0.5 * zscore(df["ret_60"])
         # 质量
@@ -73,12 +75,23 @@ def score_universe(df: pd.DataFrame, cfg: dict, kind: str) -> pd.DataFrame:
         val = -val  # 低估值=高分
         # 资金流
         ff = 0.5 * zscore(df["fund_flow_5"].fillna(0)) + 0.5 * zscore(df["fund_flow_20"].fillna(0))
+        # 规模（小市值溢价：对数市值越低分越高）
+        mc = pd.to_numeric(df["market_cap"], errors="coerce")
+        size = -zscore(np.log(mc.fillna(mc.median()))) if mc.notna().any() else pd.Series(0.0, index=df.index)
+        # 反转（短期反转：近 5 日跌多的后续反弹概率高 -> -ret_5）
+        rev = -zscore(df["ret_5"].fillna(0))
+        # 行业动量（行业整体动量增强：取行业内 ret_60 均值作为该行业每只股票的动量项）
+        ind_mom_raw = df["ret_60"].fillna(df["ret_60"].mean()).groupby(df["industry"]).transform("mean")
+        ind_mom = zscore(ind_mom_raw.fillna(ind_mom_raw.mean()))
         # 中性化
         mom = _neutralize(mom, df, cfg, kind)
         q = _neutralize(q, df, cfg, kind)
         val = _neutralize(val, df, cfg, kind)
         ff = _neutralize(ff, df, cfg, kind)
-        comps = {"momentum": mom, "quality": q, "value": val, "fund_flow": ff}
+        size = _neutralize(size, df, cfg, kind)
+        ind_mom = _neutralize(ind_mom, df, cfg, kind)
+        comps = {"momentum": mom, "quality": q, "value": val, "fund_flow": ff,
+                 "size": size, "reversal": rev, "industry_momentum": ind_mom}
     else:
         w = get(cfg, "models", "etf_weights",
                 default={"scale": 0.15, "liquidity": 0.20, "premium": 0.15,
@@ -127,6 +140,10 @@ def compute_factor_rows(fetcher: DataFetcher, cfg: dict, kind: str) -> pd.DataFr
             return pd.DataFrame()
         df = pd.DataFrame(rows)
         df["name"] = df["code"].map(uni.set_index("code")["name"].to_dict())
+        # 规模因子原料：从选股池映射总市值（已是数值列）
+        df["market_cap"] = df["code"].map(
+            pd.to_numeric(uni.set_index("code")["market_cap"], errors="coerce").to_dict()
+        )
         return df
     else:
         uni = fetcher.get_etf_universe()
