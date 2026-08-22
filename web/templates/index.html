@@ -30,6 +30,13 @@
   .factor-row .bar { flex:1; height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
   .factor-row .bar > i { display:block; height:100%; background:var(--accent); border-radius:4px; }
   .factor-row .w { width:44px; text-align:right; color:var(--muted); }
+  /* 候选表因子贡献可视化小条 */
+  .attr-bars { display:flex; flex-direction:column; gap:3px; min-width:170px; }
+  .attr-bars .ab { display:flex; align-items:center; gap:6px; font-size:12px; }
+  .attr-bars .ab .lab { width:52px; color:var(--muted); text-align:right; }
+  .attr-bars .ab .track { flex:1; height:6px; background:var(--bg); border-radius:3px; overflow:hidden; }
+  .attr-bars .ab .track > i { display:block; height:100%; border-radius:3px; }
+  .attr-bars .ab .val { width:42px; text-align:right; font-variant-numeric:tabular-nums; }
   .fdesc { font-size:12px; color:var(--muted); margin:2px 0 10px 58px; line-height:1.5; }
   .steps { display:flex; flex-direction:column; gap:10px; }
   .step { display:flex; gap:12px; font-size:13px; line-height:1.6; }
@@ -185,6 +192,13 @@
     <div class="note" id="bt-note"></div>
   </div>
 
+  <!-- 因子有效性 IC / ICIR -->
+  <div class="card">
+    <h2>📊 因子有效性 <span class="tag">IC / ICIR（演示数据）</span></h2>
+    <table id="tbl-ic"><thead></thead><tbody></tbody></table>
+    <div class="note">IC = 因子值与后向收益的截面秩相关；ICIR = IC 均值/标准差（越高越稳定）。IC&gt;0 且 ICIR&gt;0.5 视为有效。当前展示合成演示数据（真实因子历史未落库）。</div>
+  </div>
+
   <footer>策略参数来自 config.json；候选数据需服务器连通行情接口后生成。QuantPick · 量化研究工具。</footer>
 </div>
 
@@ -227,14 +241,29 @@ function fmt(v, pct){
   return pct ? (n*100).toFixed(1) : n.toFixed(2);
 }
 
-function attribution(r){
-  const keys = ["momentum","quality","value","fund_flow","scale","liquidity","premium","tracking_error","expense"];
+const FACTOR_LABEL = {
+  momentum:"动量", quality:"质量", value:"估值", fund_flow:"资金",
+  size:"规模", reversal:"反转", industry_momentum:"行业",
+  scale:"规模", liquidity:"流动", premium:"溢价",
+  tracking_error:"误差", expense:"费用"
+};
+function attributionBars(r){
+  const keys = ["momentum","quality","value","fund_flow","size","reversal","industry_momentum",
+                "scale","liquidity","premium","tracking_error","expense"];
   const parts = keys.map(k=>({k, v: Number(r["c_"+k]||0)}))
-                    .filter(x=>Math.abs(x.v)>0.001)
-                    .sort((a,b)=>b.v-a.v);
+                    .filter(x=>Math.abs(x.v)>0.005)
+                    .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
   if (!parts.length) return "-";
-  const top = parts.slice(0,3).map(x=>`${x.k[0].toUpperCase()}${x.v>=0?"+":""}${x.v.toFixed(2)}`);
-  return top.join(" ");
+  const top = parts.slice(0,4);
+  const max = Math.max(...top.map(x=>Math.abs(x.v))) || 1;
+  return '<div class="attr-bars">' + top.map(x=>{
+    const w = Math.max(3, Math.round(Math.abs(x.v)/max*100));
+    const col = x.v>=0 ? "var(--accent)" : "#e0533d";
+    const sign = x.v>=0?"+":"";
+    return `<div class="ab"><span class="lab">${FACTOR_LABEL[x.k]||x.k}</span>`
+         + `<span class="track"><i style="width:${w}%;background:${col}"></i></span>`
+         + `<span class="val">${sign}${x.v.toFixed(2)}</span></div>`;
+  }).join("") + '</div>';
 }
 
 function render(tableId, rows, cols){
@@ -246,7 +275,7 @@ function render(tableId, rows, cols){
   let thead = "<tr>" + cols.map(c=>`<th>${c[1]}</th>`).join("") + "</tr>";
   let tbody = rows.map(r=>{
     return "<tr>" + cols.map(c=>{
-      if (c[0]==="attr") return `<td class="attr">${attribution(r)}</td>`;
+      if (c[0]==="attr") return `<td class="attr">${attributionBars(r)}</td>`;
       let val = r[c[0]];
       if (c[0]==="position_pct" || c[0]==="stop_loss_pct") val = fmt(val, true);
       else if (["score","ret_20","ret_60","vol_60"].includes(c[0])) val = fmt(val, false);
@@ -262,6 +291,33 @@ function render(tableId, rows, cols){
     }).join("") + "</tr>";
   }).join("");
   tbl.innerHTML = `<thead>${thead}</thead><tbody>${tbody}</tbody>`;
+}
+
+const IC_COLS = [["factor","因子"],["ic","IC"],["icir","ICIR"],["t","t值"],["pos_ratio","正向占比"],["n","样本"]];
+function loadIC(){
+  try {
+    fetch("/api/ic").then(x=>x.json()).then(d=>{
+      const rows = Object.entries(d).map(([k,v])=>({factor:k, ic:v.ic, icir:v.icir, t:v.t, pos_ratio:v.pos_ratio, n:v.n}));
+      renderIC(rows);
+    }).catch(()=>{});
+  } catch(e){}
+}
+function renderIC(rows){
+  const tbl = document.getElementById("tbl-ic");
+  if(!rows.length){ tbl.innerHTML='<tbody><tr><td colspan="6" class="empty">暂无数据</td></tr></tbody>'; return; }
+  const head = "<tr>"+IC_COLS.map(c=>`<th>${c[1]}</th>`).join("")+"</tr>";
+  const body = rows.map(r=>{
+    const good = (r.icir!==null && r.icir>0.5);
+    const icCls = (r.ic===null)?"":(r.ic>=0?"pos":"neg");
+    const irCls = good?"pos":(r.icir!==null?"neg":"");
+    return `<tr><td>${r.factor}</td>`
+      + `<td class="${icCls}">${r.ic===null?"-":r.ic.toFixed(3)}</td>`
+      + `<td class="${irCls}">${r.icir===null?"-":r.icir.toFixed(3)}</td>`
+      + `<td>${r.t===null?"-":r.t.toFixed(2)}</td>`
+      + `<td>${r.pos_ratio===null?"-":(r.pos_ratio*100).toFixed(0)+"%"}</td>`
+      + `<td>${r.n}</td></tr>`;
+  }).join("");
+  tbl.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
 }
 
 async function load(force){
@@ -286,6 +342,7 @@ async function load(force){
   } catch(e){}
   loadPerf();
   loadBacktest();
+  loadIC();
 }
 
 function drawBacktestNav(d){
