@@ -164,6 +164,7 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
     uni = fetcher.get_stock_universe()
     uni = uni.sort_values("amount", ascending=False).head(pool)
     codes = uni["code"].astype(str).tolist()
+    mc_map = uni.set_index("code")["market_cap"].to_dict()
 
     close = _build_panel(fetcher, codes, "收盘")
     if close.shape[1] < top_n:
@@ -183,10 +184,13 @@ def run_backtest(fetcher: DataFetcher, cfg: dict, pool: int = 80, lookback: int 
         if pos < lookback + 1:
             continue
         win = close.iloc[: pos + 1]
+        ret_5 = (win.iloc[-1] / win.iloc[-6] - 1)
         ret_20 = (win.iloc[-1] / win.iloc[-1 - 20] - 1)
         ret_60 = (win.iloc[-1] / win.iloc[-1 - 60] - 1)
+        mc = pd.Series({c: mc_map.get(c) for c in codes})
         snap = pd.DataFrame({
-            "ret_20": ret_20, "ret_60": ret_60,
+            "ret_5": ret_5, "ret_20": ret_20, "ret_60": ret_60,
+            "market_cap": mc,
             "pe": fund["pe"], "pb": fund["pb"], "dividend_yield": fund["dividend_yield"],
             "roe": fund["roe"], "debt_ratio": fund["debt_ratio"],
             "fund_flow_5": 0.0, "fund_flow_20": 0.0, "industry": None,
