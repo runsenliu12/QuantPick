@@ -28,6 +28,7 @@ from src.risk import finalize
 from src.notify import build_report, notify, alert
 from src.data import DataFetcher, is_trading_day
 from src import history as history_mod
+from src import us_etf as us_mod
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("quantpick.scan")
@@ -114,6 +115,17 @@ def main():
     etfs = res.get("etfs")
     regime = res.get("regime", {"state": "risk_on", "scale": 1.0})
 
+    # 美股 ETF 选基（默认关闭，需在 config 启用；失败不影响 A 股流程）
+    us = None
+    if get(cfg, "us_etf", "enabled", default=False):
+        try:
+            us = us_mod.rank_us_etfs(cfg)
+            if us is not None and not us.empty:
+                print(us_mod.build_us_report(us))
+        except Exception as e:
+            logger.warning("美股 ETF 选基失败（已跳过，不影响 A 股）: %s", e)
+            us = None
+
     # 空结果告警：数据没取到或市场过滤后为空，绝不静默当成正常
     if (stocks is None or stocks.empty) and (etfs is None or etfs.empty):
         alert(cfg, "本期候选为空（数据未取到或市场状态过滤），请检查数据源与网络。")
@@ -121,6 +133,8 @@ def main():
         return
 
     report = build_report(stocks, etfs, regime)
+    if us is not None and not us.empty:
+        report += us_mod.build_us_report(us)
     print(report)
 
     # 落盘
@@ -142,6 +156,8 @@ def main():
         history_mod.save_run(db, run_date, "stock", stocks)
     if etfs is not None and not etfs.empty:
         history_mod.save_run(db, run_date, "etf", etfs)
+    if us is not None and not us.empty:
+        history_mod.save_run(db, run_date, "us_etf", us)
     print(f"[ok] 已留存历史 {run_date}")
 
     if not args.no_notify:
