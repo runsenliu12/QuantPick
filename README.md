@@ -144,11 +144,40 @@ chmod +x docker-deploy.sh
 ## 🗺️ 路线图
 
 - [x] 历史回测净值曲线看板 + 离线 `--demo` 演示模式（无需密钥即可跑通展示）
+- [x] 美股 ETF 选基脚手架（`src/us_etf.py`，yfinance 惰性接入，默认关闭；需 `config.json` 启用 + 安装 `yfinance`）
+- [x] 因子表现监控（IC / ICIR 滚动，`src/ic.py` + `/api/ic`，含合成演示兜底）
+- [x] ML 打分模块（`src/ml.py`，纯 numpy 扩张窗口 walk-forward，无第三方依赖）
+- [x] 推送（飞书 / 企业微信 webhook，密钥放 `config.local.json` 的 `_local.notifications`，默认关闭）
 - [ ] ETF 折溢价（IOPV/净值）精确接入
-- [ ] 美股 ETF（yfinance）扩展
 - [ ] 实盘下单接口（需对接券商 API，谨慎）
-- [ ] 因子表现监控面板（IC / ICIR 滚动）
-- [ ] 微信推送（除企微外）
+
+### 美股 ETF 选基（默认关闭）
+
+```python
+# config.json
+"us_etf": {
+  "enabled": false,                 # 改为 true 启用（需 pip install yfinance）
+  "symbols": ["SPY","QQQ","IWM","VTI","GLD","TLT","ARKK","VNQ","EEM","XLF"],
+  "top_n": 5,
+  "weights": {"momentum":0.35,"liquidity":0.20,"scale":0.15,"premium":0.10,"expense":0.20}
+}
+```
+
+启用后 `scripts/daily_scan.py` 会额外产出 `kind="us_etf"` 候选池（独立风控，不影响 A 股组合），
+并与 A 股候选同 schema 写入历史表。yfinance 未安装 / 网络失败时自动回退到合成演示数据，
+保证链路与看板始终可跑通（demo 数据不进入真实决策）。
+
+### 推送（飞书 / 企业微信）
+
+密钥不入库，放 `config.local.json`：
+
+```json
+{ "notifications": { "enabled": true,
+  "feishu_webhook_url": "https://open.feishu.cn/...",
+  "wechat_webhook_url": "https://qyapi.weixin.qq.com/..." } }
+```
+
+`daily_scan.py` 与 `paper_trading.py --notify` 都会在结果产出后推送；空结果会发告警。
 
 ---
 
