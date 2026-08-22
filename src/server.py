@@ -185,6 +185,136 @@ def api_us_etf():
     return jsonify(get_us_etf(demo=demo))
 
 
+_quote_cache = {"ts": 0.0, "_key": None, "data": None}
+_QUOTE_TTL = 3600  # 行情较重，缓存 1 小时
+
+
+def get_quote(code: str, kind: str = "stock", n: int = 120, demo: bool = False) -> dict:
+    """单标的行情（OHLCV）。kind=stock|etf。优先取真实历史，失败回退合成演示。"""
+    now = time.time()
+    key = f"{kind}:{code}:{n}"
+    if not demo and _quote_cache["_key"] == key and _quote_cache["data"] \
+            and now - _quote_cache["ts"] < _QUOTE_TTL:
+        return _quote_cache["data"]
+
+    rows = None
+    source = "real"
+    if not demo:
+        cfg = load_config()
+        db = get(cfg, "data", "sqlite_path", default="data/quantpick.db")
+        fetcher = DataFetcher(sqlite_path=db,
+                              cache_days=get(cfg, "data", "cache_days", default=1))
+        try:
+            if kind == "etf":
+                hist = fetcher.get_etf_hist(code)
+            else:
+                hist = fetcher.get_stock_hist(code)
+            if hist is not None and not hist.empty:
+                rows = _hist_to_rows(hist, n=n)
+        except Exception as e:
+            logger.warning("行情获取失败 %s/%s: %s", kind, code, e)
+        finally:
+            fetcher.close()
+
+    if not rows:  # 真实数据缺失 -> 合成演示 K 线
+        rows = _demo_quote(kind, code, n)
+        source = "demo"
+
+    out = {"code": code, "kind": kind, "source": source, "rows": rows}
+    if not demo:
+        _quote_cache.update({"ts": now, "_key": key, "data": out})
+    return out
+
+
+def _hist_to_rows(hist: "pd.DataFrame", n: int = 120) -> list:
+    """把 AKShare 行情 DataFrame 转成 OHLCV 列表（保留最近 n 条）。"""
+    import pandas as pd
+    df = hist.copy()
+    # 统一列名：AKShare 历史列带中文（开盘/收盘/最高/最低/成交量/日期）
+    colmap = {}
+    for c in df.columns:
+        if c in ("开盘", "open", "Open"):
+            colmap[c] = "open"
+        elif c in ("收盘", "close", "Close"):
+            colmap[c] = "close"
+        elif c in ("最高", "high", "High"):
+            colmap[c] = "high"
+        elif c in ("最低", "low", "Low"):
+            colmap[c] = "low"
+        elif c in ("成交量", "volume", "Volume"):
+            colmap[c] = "volume"
+        elif c in ("日期", "date", "Date"):
+            colmap[c] = "date"
+    if {"open", "close", "high", "low"} & set(colmap.values()):
+        df = df.rename(columns=colmap)
+    else:
+        return []
+    need = ["open", "high", "low", "close"]
+    if not all(c in df.columns for c in need):
+        return []
+    df = df.tail(n).copy()
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+    else:
+        df["date"] = [str(i) for i in range(len(df))]
+    out = []
+    for _, r in df.iterrows():
+        try:
+            out.append({
+                "date": str(r.get("date")),
+                "open": round(float(r["open"]), 3),
+                "high": round(float(r["high"]), 3),
+                "low": round(float(r["low"]), 3),
+                "close": round(float(r["close"]), 3),
+                "volume": float(r.get("volume") or 0),
+            })
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _demo_quote(kind: str, code: str, n: int = 120) -> list:
+    """合成演示 K 线：带趋势 + 波动 + 涨跌停感，用于前端展示（非真实数据）。"""
+    import numpy as np
+    rng = np.random.default_rng(abs(hash(code)) % (2 ** 31))
+    base = 10.0 if kind == "stock" else 1.0
+    drift = rng.normal(0.0004, 0.0012)  # 区间累计趋势
+    closes = [base]
+    for _ in range(n - 1):
+        ret = drift + rng.normal(0, 0.018)
+        # 涨跌停感：单日波动封顶 ~9.8%
+        ret = max(-0.098, min(0.098, ret))
+        closes.append(closes[-1] * (1 + ret))
+    rows = []
+    prev = closes[0]
+    for i, c in enumerate(closes):
+        o = prev * (1 + rng.normal(0, 0.004))
+        hi = max(o, c) * (1 + abs(rng.normal(0, 0.006)))
+        lo = min(o, c) * (1 - abs(rng.normal(0, 0.006)))
+        vol = float(rng.uniform(0.5e8, 3e8)) if kind == "stock" else float(rng.uniform(1e7, 5e7))
+        rows.append({
+            "date": f"D-{n - i}",
+            "open": round(o, 3),
+            "high": round(hi, 3),
+            "low": round(lo, 3),
+            "close": round(c, 3),
+            "volume": round(vol, 2),
+        })
+        prev = c
+    return rows
+
+
+@app.route("/api/quote")
+def api_quote():
+    code = request.args.get("code", "")
+    kind = request.args.get("kind", "stock")
+    n = request.args.get("n", 120, type=int)
+    demo = request.args.get("demo") == "1"
+    if not code:
+        return jsonify({"error": "code 必填"}), 400
+    return jsonify(get_quote(code, kind=kind, n=n, demo=demo))
+
+
 if __name__ == "__main__":
     cfg = load_config()
     host = get(cfg, "server", "host", default="0.0.0.0")
