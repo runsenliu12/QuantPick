@@ -70,6 +70,7 @@ def compute_stock_factors(fetcher, code: str) -> dict:
     """计算单只股票因子：动量 / 质量 / 估值 / 资金流 + 行业（中性化用）。"""
     f = {"code": code, "industry": None}
     hist = fetcher.get_stock_hist(code)
+    f["ret_5"] = _recent_return(hist, 5)
     f["ret_20"] = _recent_return(hist, 20)
     f["ret_60"] = _recent_return(hist, 60)
     f["vol_60"] = _annual_vol(hist, 60)
@@ -97,6 +98,7 @@ def compute_etf_factors(fetcher, code: str, spot_row: dict | None = None) -> dic
     """
     f = {"code": code}
     hist = fetcher.get_etf_hist(code)
+    f["ret_5"] = _recent_return(hist, 5)
     f["ret_20"] = _recent_return(hist, 20)
     f["ret_60"] = _recent_return(hist, 60)
     f["vol_60"] = _annual_vol(hist, 60)
