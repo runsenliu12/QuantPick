@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>QuantPick · 方法论</title>
+<style>
+  :root { --bg:#f7f8fa; --card:#fff; --ink:#1f2329; --muted:#8a9099; --line:#e6e8eb; --accent:#2b6de4; --red:#e23b3b; --green:#1aa260; --warn:#e08a00; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--ink); }
+  nav.topnav { background:var(--card); border-bottom:1px solid var(--line); padding:0 16px; display:flex; gap:2px; flex-wrap:wrap; position:sticky; top:0; z-index:40; }
+  nav.topnav a { text-decoration:none; color:var(--muted); font-size:13px; padding:11px 14px; border-bottom:2px solid transparent; }
+  nav.topnav a:hover { color:var(--accent); }
+  nav.topnav a.active { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:16px 24px; }
+  header h1 { font-size:18px; margin:0; }
+  .wrap { max-width:900px; margin:20px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:15px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+  .banner { background:#fff8e6; border:1px solid #f5d98a; color:#8a6500; padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:16px; line-height:1.6; }
+  .step { display:flex; gap:12px; font-size:14px; line-height:1.7; margin:12px 0; }
+  .step .n { flex:0 0 26px; height:26px; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; }
+  .kv { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .kv:last-child { border-bottom:none; }
+  .kv .k { color:var(--muted); }
+  .kv .v { text-align:right; font-weight:600; }
+  .lead { color:#4a5057; font-size:14px; line-height:1.8; }
+  footer { color:var(--muted); font-size:12px; text-align:center; padding:10px 0 30px; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a href="/">🏠 总览</a>
+  <a href="/backtest">📉 回测</a>
+  <a href="/factors">📊 因子</a>
+  <a href="/us-etf">🌎 美股ETF</a>
+  <a href="/methodology" class="active">⚙️ 方法论</a>
+</nav>
+<header>
+  <h1>⚙️ 方法论与策略画像</h1>
+</header>
+
+<div class="wrap">
+  <div class="banner">⚠️ {{ strategy.disclaimer }}</div>
+
+  <div class="card">
+    <h2>🧭 模型概要</h2>
+    <p class="lead">
+      模型：<b>{{ strategy.model }}</b>　|　基准：{{ strategy.benchmark_name }}（{{ strategy.benchmark }}）　|　数据源：{{ strategy.data_sources }}
+    </p>
+    <p class="lead">
+      QuantPick 是多因子量化筛选系统：对 A 股与 ETF 分别用加权 Z-Score 打分，叠加风控（相关性去重 + 市场状态仓位缩放 + 个股止损），输出可解释的候选清单与因子贡献分解。所有参数来自 <code>config.json</code>，可随时调整。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>🔢 运行方法论（六步）</h2>
+    {% for m in strategy.methodology %}
+    <div class="step"><span class="n">{{ loop.index }}</span><span>{{ m }}</span></div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>🛡️ 风控规则</h2>
+    {% for r in strategy.risk_rows %}<div class="kv"><span class="k">{{ r.k }}</span><span class="v">{{ r.v }}</span></div>{% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>🌦️ 市场状态过滤</h2>
+    {% for r in strategy.regime_rows %}<div class="kv"><span class="k">{{ r.k }}</span><span class="v">{{ r.v }}</span></div>{% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>💱 交易成本假设</h2>
+    {% for r in strategy.cost_rows %}<div class="kv"><span class="k">{{ r.k }}</span><span class="v">{{ r.v }}</span></div>{% endfor %}
+  </div>
+
+  <div class="card">
+    <h2>🔭 选股范围</h2>
+    {% for r in strategy.universe_rows %}<div class="kv"><span class="k">{{ r.k }}</span><span class="v">{{ r.v }}</span></div>{% endfor %}
+  </div>
+
+  <footer>QuantPick · 量化研究工具。策略参数来自 config.json；内容仅供研究，不构成投资建议。</footer>
+</div>
+</body>
+</html>
