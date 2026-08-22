@@ -159,6 +159,13 @@
     <div class="note">仅供参考，不构成投资建议。市场有风险，投资需谨慎。</div>
   </div>
 
+  <!-- 美股 ETF（默认关闭，演示数据） -->
+  <div class="card">
+    <h2>🌎 美股 ETF 精选 Top <span class="tag" id="us-etf-src">（演示）</span></h2>
+    <table id="tbl-us-etf"><thead></thead><tbody></tbody></table>
+    <div class="note">需在 config.json 启用 us_etf 并安装 yfinance 获取真实数据；默认以合成演示数据展示。仅供参考，不构成投资建议。</div>
+  </div>
+
   <!-- 历史 -->
   <div class="card">
     <h2>📜 历史精选（近期）</h2>
@@ -209,6 +216,11 @@ const STOCK_COLS = [
   ["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"],["attr","因子贡献"]
 ];
 const ETF_COLS = [
+  ["rank","排名"],["code","代码"],["name","名称"],["score","分数"],
+  ["position_pct","仓位%"],["stop_loss_pct","止损%"],
+  ["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"],["attr","因子贡献"]
+];
+const US_ETF_COLS = [
   ["rank","排名"],["code","代码"],["name","名称"],["score","分数"],
   ["position_pct","仓位%"],["stop_loss_pct","止损%"],
   ["ret_20","20日%"],["ret_60","60日%"],["vol_60","年化波动%"],["attr","因子贡献"]
@@ -343,6 +355,20 @@ async function load(force){
   loadPerf();
   loadBacktest();
   loadIC();
+  loadUsEtf();
+}
+
+async function loadUsEtf(){
+  try {
+    const r = await fetch("/api/us_etf");
+    const d = await r.json();
+    render("tbl-us-etf", d.rows || [], US_ETF_COLS);
+    const src = document.getElementById("us-etf-src");
+    if (src) src.textContent = d.source === "real" ? "（实时）" : "（演示）";
+  } catch(e){
+    const t = document.getElementById("tbl-us-etf");
+    if (t) t.innerHTML = '<tbody><tr><td colspan="10" class="empty">美股 ETF 加载失败：' + e.message + '</td></tr></tbody>';
+  }
 }
 
 function drawBacktestNav(d){
