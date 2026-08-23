@@ -69,6 +69,96 @@ def api_strategy():
     return jsonify(build_strategy(load_config()))
 
 
+# ---- 常见量化方法库元数据：仅用于 /methods 页面静态展示，不运行任何策略 ----
+METHODS_META = [
+    {"id": "dual_ma", "name": "双均线交叉", "category": "趋势跟踪",
+     "file": "src/methods/trend.py", "params": "fast=5, slow=20",
+     "risk": "震荡市假信号多，需配合止损",
+     "desc": "快线上穿慢线看多、下穿看空。最经典的趋势跟踪信号。",
+     "snippet": "def dual_ma_signal(close, fast=5, slow=20):\n    f, s = sma(close, fast), sma(close, slow)\n    return np.sign(f - s).ffill().fillna(0)"},
+    {"id": "macd", "name": "MACD", "category": "趋势跟踪",
+     "file": "src/methods/trend.py", "params": "fast=12, slow=26, signal=9",
+     "risk": "滞后，趋势末尾易反复",
+     "desc": "DIF 与 DEA 的金叉/死叉判断多空。",
+     "snippet": "dif = ema(close, 12) - ema(close, 26)\ndea = ema(dif, 9)\nsignal = np.sign(dif - dea).ffill()"},
+    {"id": "breakout", "name": "N 日突破", "category": "趋势跟踪",
+     "file": "src/methods/trend.py", "params": "window=20",
+     "risk": "假突破，需 ATR 止损",
+     "desc": "收盘价创 N 日新高买入（海龟法则核心）。",
+     "snippet": "hh = close.rolling(20).max().shift(1)\nsignal = (close > hh).astype(int)"},
+    {"id": "ts_mom", "name": "时间序列动量", "category": "动量",
+     "file": "src/methods/momentum.py", "params": "window=60",
+     "risk": "动量崩溃（反转）",
+     "desc": "过去 N 日收益为正看多、负看空。",
+     "snippet": "mom = close / close.shift(60) - 1\nsignal = np.sign(mom)"},
+    {"id": "xs_mom", "name": "横截面动量", "category": "动量",
+     "file": "src/methods/momentum.py", "params": "window=60",
+     "risk": "需足够多资产分散",
+     "desc": "每个时点按收益排序，前 1/3 多、后 1/3 空。",
+     "snippet": "rank = returns.rolling(60).sum().rank(pct=True)\nsignal = np.where(rank >= 2/3, 1, np.where(rank <= 1/3, -1, 0))"},
+    {"id": "zscore_rev", "name": "z-score 均值回归", "category": "均值回归",
+     "file": "src/methods/mean_reversion.py", "params": "window=20, entry=2.0, exit=0.5",
+     "risk": "趋势市接飞刀",
+     "desc": "偏离均值超过 ±entry 反向开仓，回到 ±exit 平仓。",
+     "snippet": "z = zscore(close, 20)\n# |z| > entry 反向开仓, |z| < exit 平仓"},
+    {"id": "boll", "name": "布林带", "category": "均值回归",
+     "file": "src/methods/mean_reversion.py", "params": "window=20, k=2.0",
+     "risk": "单边行情反复止损",
+     "desc": "触及下轨做多、上轨做空，回中轨平仓。",
+     "snippet": "mid = sma(close, 20); sd = rolling_std(close, 20)\nup = mid + 2*sd; lo = mid - 2*sd"},
+    {"id": "rsi", "name": "RSI 超买超卖", "category": "均值回归",
+     "file": "src/methods/mean_reversion.py", "params": "window=14, OB=70, OS=30",
+     "risk": "强趋势中超买持续",
+     "desc": "RSI 超卖做多、超买卖出。",
+     "snippet": "rsi = 100 - 100 / (1 + rs)\nsignal = (rsi < 30) * 1 - (rsi > 70) * 1"},
+    {"id": "atr", "name": "ATR 波动率", "category": "波动率",
+     "file": "src/methods/volatility.py", "params": "window=14",
+     "risk": "不直接给方向",
+     "desc": "真实波幅均值，用于移动止损距离。",
+     "snippet": "atr = max(high-low, |high-pc|, |low-pc|).rolling(14).mean()"},
+    {"id": "vol_target", "name": "波动率目标", "category": "波动率",
+     "file": "src/methods/volatility.py", "params": "target=0.15, window=60",
+     "risk": "低波动时可能满仓",
+     "desc": "波动越高仓位越低，使组合波动平稳。",
+     "snippet": "w = 0.15 / (rolling_std(returns, 60) * sqrt(252))"},
+    {"id": "pairs", "name": "配对交易", "category": "统计套利",
+     "file": "src/methods/stat_arb.py", "params": "window=60, entry=2.0",
+     "risk": "需协整，否则失效",
+     "desc": "两资产价差 z-score 极端时反向开仓。",
+     "snippet": "spread = log(A) - log(B)\nz = (spread - sma(spread, 60)) / std(spread, 60)"},
+    {"id": "grid", "name": "网格价位", "category": "统计套利",
+     "file": "src/methods/stat_arb.py", "params": "n=10, step=0.02",
+     "risk": "单边下跌越跌越买",
+     "desc": "生成中心上下各 n 档网格价位。",
+     "snippet": "levels = [p * (1 + (i - n) * step) for i in range(2*n + 1)]"},
+    {"id": "kelly", "name": "凯利公式", "category": "仓位管理",
+     "file": "src/methods/position.py", "params": "frac=1.0（建议半凯利）",
+     "risk": "满凯利波动极大",
+     "desc": "按胜率与盈亏比确定最优下注比例。",
+     "snippet": "f = (p*b - (1-p)) / b\nf = max(0.0, min(1.0, f)) * frac"},
+    {"id": "risk_parity", "name": "风险平价", "category": "仓位管理",
+     "file": "src/methods/position.py", "params": "迭代收敛",
+     "risk": "依赖协方差估计",
+     "desc": "使各资产边际风险贡献相等的权重。",
+     "snippet": "# 迭代重分配，直到各资产风险贡献相等\nw = w * (1 / mrc); w /= w.sum()"},
+    {"id": "multi_factor", "name": "多因子合成", "category": "多因子",
+     "file": "src/methods/multi_factor.py", "params": "weights=等权",
+     "risk": "因子失效则合成失效",
+     "desc": "因子横截面 z-score 后加权排序选股。",
+     "snippet": "z = zscore_panel(scores)\ncombined = (z * w).sum(1).sort_values(ascending=False)"},
+]
+
+
+@app.route("/api/methods")
+def api_methods():
+    return jsonify(METHODS_META)
+
+
+@app.route("/methods")
+def page_methods():
+    return render_template("methods.html", methods=METHODS_META)
+
+
 # ---- 独立专题页路由（复用 /api/* 数据，不新增后端逻辑）----
 @app.route("/backtest")
 def page_backtest():
