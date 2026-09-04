@@ -146,6 +146,21 @@ METHODS_META = [
      "risk": "因子失效则合成失效",
      "desc": "因子横截面 z-score 后加权排序选股。",
      "snippet": "z = zscore_panel(scores)\ncombined = (z * w).sum(1).sort_values(ascending=False)"},
+    {"id": "turtle", "name": "海龟法则完整版", "category": "趋势跟踪",
+     "file": "src/methods/turtle.py", "params": "entry=20, exit=10, atr=20, max_units=4",
+     "risk": "震荡市频繁止损，需严格纪律与仓位管理",
+     "desc": "突破入场 + 金字塔加仓 + 2*ATR 止损 + 反向突破退出，经典趋势系统。",
+     "snippet": "pos = turtle_signal(high, low, close, entry=20, exit_win=10)\n# position 为单位数（-4..+4）"},
+    {"id": "multi_timeframe", "name": "多周期共振", "category": "趋势跟踪",
+     "file": "src/methods/multi_timeframe.py", "params": "windows=5,20,60",
+     "risk": "信号滞后，易错过启动段",
+     "desc": "多周期均线同向排列（多头/空头）确认趋势，比单均线更抗噪。",
+     "snippet": "sig = multi_timeframe_signal(close, windows=(5,20,60))\n# 短>中>长 看多；短<中<长 看空"},
+    {"id": "ml_timing", "name": "机器学习择时", "category": "机器学习",
+     "file": "src/methods/ml_timing.py", "params": "lookahead=5, kind=logreg",
+     "risk": "过拟合，需严谨特征工程与样本外验证",
+     "desc": "用监督模型（逻辑回归/随机森林）预测未来涨跌方向，扩张窗口 walk-forward。",
+     "snippet": "sig = ml_timing_signal(X, y, lookahead=5, kind='logreg')\n# 依赖 scikit-learn（惰性导入）"},
 ]
 
 
