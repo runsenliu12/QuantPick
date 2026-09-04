@@ -21,6 +21,8 @@
 | `turtle.py` | 趋势跟踪 | 海龟法则完整版（突破入场+金字塔加仓+2*ATR止损+反向突破退出） |
 | `multi_timeframe.py` | 趋势跟踪 | 多周期均线共振 |
 | `ml_timing.py` | 机器学习 | 机器学习择时（logreg/随机森林，walk-forward；惰性依赖 scikit-learn） |
+| `rotation.py` | 动量（多标的） | ETF 动量轮动：平滑动量打分、排名选强、绝对动量过滤；含多标的回测 |
+| `backtest_signal.py` | 回测 | 单标的信号回测（T+1/成本/指标）与方法注册表 |
 
 ## 信号约定
 
@@ -43,6 +45,20 @@ pos = mean_reversion.bollinger_signal(close, window=20, k=2.0, long_only=True)
 
 # 仓位：风险平价（需协方差矩阵 cov）
 # w = position.risk_parity_weights(cov)
+
+# 多标的轮动：ETF 动量轮动（改写自聚宽社区策略）
+from src.methods.rotation import gen_multi_prices, rotation_backtest
+px = gen_multi_prices(n=750, n_assets=8, seed=7)   # 合成行情，不连数据源
+res = rotation_backtest(px, top_k=3, cost=0.0005)
+print(res["metrics"])
+```
+
+### 命令行跑回测（合成数据，不连券商）
+
+```bash
+python -m scripts.execute rotate --assets 8 --top-k 2   # 有趋势场景
+python -m scripts.execute rotate --trend-amp 0          # 无趋势场景（演示轮动失效）
+python -m scripts.execute method --name turtle --n 250  # 单标的信号回测
 ```
 
 ## 风险提示
