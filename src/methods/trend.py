@@ -18,7 +18,7 @@ def dual_ma_signal(close: pd.Series, fast: int = 5, slow: int = 20) -> pd.Series
     """
     f, s = sma(close, fast), sma(close, slow)
     cross = np.sign(f - s)
-    return cross.fillna(method="ffill").fillna(0)
+    return cross.ffill().fillna(0)
 
 
 def triple_ma_signal(close, fast: int = 5, mid: int = 20, slow: int = 60):
@@ -37,7 +37,7 @@ def macd_signal(close, fast: int = 12, slow: int = 26, signal: int = 9):
     dif = ema(close, fast) - ema(close, slow)
     dea = ema(dif, signal)
     cross = np.sign(dif - dea)
-    return cross.fillna(method="ffill").fillna(0)
+    return cross.ffill().fillna(0)
 
 
 def breakout_signal(close, window: int = 20):
