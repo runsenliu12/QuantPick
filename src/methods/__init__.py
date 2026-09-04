@@ -13,6 +13,7 @@
   - turtle            : 海龟法则完整版（突破+加仓+ATR止损+退出）
   - multi_timeframe   : 多周期均线共振
   - ml_timing         : 机器学习择时（惰性依赖 scikit-learn）
+  - rotation          : ETF/多标的动量轮动（排名+绝对动量过滤，改写自聚宽社区策略）
 
 所有方法仅依赖 numpy / pandas，无外部网络/IO。调用示例：
 
@@ -21,14 +22,17 @@
 """
 from . import (trend, momentum, mean_reversion, volatility,
                stat_arb, position, multi_factor,
-               turtle, multi_timeframe, ml_timing)
+               turtle, multi_timeframe, ml_timing, rotation)
 from .base import (to_returns, log_returns, sma, ema, rolling_std, zscore,
                    normalize_weights, signal_to_position)
+from .rotation import (momentum_score, rotation_weights, rotation_backtest,
+                       buy_and_hold)
 
 __all__ = [
     "trend", "momentum", "mean_reversion", "volatility",
     "stat_arb", "position", "multi_factor",
-    "turtle", "multi_timeframe", "ml_timing",
+    "turtle", "multi_timeframe", "ml_timing", "rotation",
+    "momentum_score", "rotation_weights", "rotation_backtest", "buy_and_hold",
     "to_returns", "log_returns", "sma", "ema", "rolling_std",
     "zscore", "normalize_weights", "signal_to_position",
 ]
