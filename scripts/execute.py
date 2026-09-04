@@ -7,6 +7,8 @@
     python -m scripts.execute gen --platform qmt --out strategy_qmt.py
     python -m scripts.execute gen --platform joinquant
     python -m scripts.execute paper --demo             # 纸面回放演示（合成行情）
+    python -m scripts.execute method --name turtle --demo   # 把方法接到单标的回测（合成数据）
+    python -m scripts.execute method --name rsi --params "window=14,oversold=30" --n 300
 
 注意：所有命令默认只"生成代码/模拟"，绝不连接券商、绝不自动下单。
 """
@@ -22,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.config import load_config
 from src.execution import build_target, save_target, load_target, simulate, fetch_prices_demo
 from src.execution import ptrade_adapter, qmt_adapter, joinquant_adapter
+from src.methods.backtest_signal import backtest_method, list_methods
 
 _ADAPTERS = {"ptrade": ptrade_adapter, "qmt": qmt_adapter, "joinquant": joinquant_adapter}
 
@@ -65,6 +68,15 @@ def main():
     pp.add_argument("--target", default="target_portfolio.json")
     pp.add_argument("--days", type=int, default=120)
 
+    pm = sub.add_parser("method", help="把某个量化方法接到单标的回测框架（合成数据演示，不连券商）")
+    pm.add_argument("--name", required=True, help="方法名，如 turtle / dual_ma / rsi / breakout")
+    pm.add_argument("--params", default="", help="覆盖参数，如 entry=20,exit_win=10,fast=5")
+    pm.add_argument("--n", type=int, default=250, help="合成 K 线数量")
+    pm.add_argument("--seed", type=int, default=7, help="随机种子（换种子换行情）")
+    pm.add_argument("--cost", type=float, default=0.0008, help="单边成本（佣金+滑点）")
+    pm.add_argument("--no-t1", action="store_true", help="关闭 T+1（信号当日生效）")
+    pm.add_argument("--list", action="store_true", help="列出所有支持的方法名")
+
     args = p.parse_args()
     if args.cmd == "target":
         cands = _demo_candidates() if args.demo else _real_candidates()
@@ -96,6 +108,31 @@ def main():
         print(json.dumps({k: r[k] for k in ("final_value", "total_return", "max_drawdown")},
                          ensure_ascii=False, indent=2))
         print(f"交易日: {len(r['nav'])}，成交笔数: {len(r['trades'])}")
+    elif args.cmd == "method":
+        if args.list:
+            print("支持的方法：", ", ".join(list_methods()))
+            return
+        params = {}
+        for kv in (s for s in args.params.split(",") if s.strip()):
+            k, v = kv.split("=", 1)
+            try:
+                vv = int(v)
+            except ValueError:
+                try:
+                    vv = float(v)
+                except ValueError:
+                    vv = v
+            params[k.strip()] = vv
+        res = backtest_method(args.name, params=params, n=args.n, seed=args.seed,
+                              cost=args.cost, t1=not args.no_t1)
+        m = res["metrics"]
+        print(f"=== 方法 {args.name} 回测（合成数据，不连券商） ===")
+        print(f"参数: {params or '默认'}  T+1: {not args.no_t1}  成本: {args.cost}  种子: {args.seed}")
+        for k, v in m.items():
+            if isinstance(v, float):
+                print(f"  {k}: {v:.4f}" if abs(v) < 1 else f"  {k}: {v:.2f}")
+            else:
+                print(f"  {k}: {v}")
     else:
         p.print_help()
 
