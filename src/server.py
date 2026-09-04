@@ -161,6 +161,11 @@ METHODS_META = [
      "risk": "过拟合，需严谨特征工程与样本外验证",
      "desc": "用监督模型（逻辑回归/随机森林）预测未来涨跌方向，扩张窗口 walk-forward。",
      "snippet": "sig = ml_timing_signal(X, y, lookahead=5, kind='logreg')\n# 依赖 scikit-learn（惰性导入）"},
+    {"id": "rotation", "name": "ETF 动量轮动", "category": "动量",
+     "file": "src/methods/rotation.py", "params": "lookback=21, smooth=3, top_k=1, threshold=0.0",
+     "risk": "动量崩溃（急反转）、频繁换仓成本；标的池相关性过高时无效",
+     "desc": "跨市场 ETF 池按 21 日平滑动量排名，持有最强标的；绝对动量 <= 0 时空仓。改写自聚宽社区策略「指数ETF动量轮动策略-2」。",
+     "snippet": "score = momentum_score(prices, lookback=21, smooth=3)\nw = rotation_weights(prices, top_k=1, threshold=0.0)\nres = rotation_backtest(prices, cost=0.0005)"},
 ]
 
 
