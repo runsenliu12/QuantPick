@@ -33,6 +33,30 @@
   pre.code { background:#0f1115; color:#e6e6e6; padding:12px; border-radius:8px; overflow:auto; font-size:12px; line-height:1.55; white-space:pre; margin:10px 0 0; font-family:"SFMono-Regular",Consolas,Menlo,monospace; }
   .note { color:var(--muted); font-size:12px; margin-top:8px; line-height:1.6; }
   footer { color:var(--muted); font-size:12px; text-align:center; padding:10px 0 30px; }
+  .copy-btn { align-self:flex-end; font-size:12px; padding:5px 12px; border:1px solid var(--accent); border-radius:6px; background:var(--accent); color:#fff; cursor:pointer; }
+  .copy-btn:active { transform:translateY(1px); }
+  .copied { background:#eef1f4 !important; color:#1aa260 !important; border-color:#cfd6dd !important; }
+
+  /* 沙盒 */
+  .sandbox { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:24px; }
+  .sandbox h2 { font-size:16px; margin:0 0 4px; }
+  .sandbox .sb-sub { font-size:12px; color:var(--muted); margin-bottom:14px; }
+  .sb-controls { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-end; margin-bottom:14px; }
+  .sb-field { display:flex; flex-direction:column; gap:4px; }
+  .sb-field label { font-size:12px; color:var(--muted); }
+  .sb-field select, .sb-field input { font-size:13px; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:#fff; color:var(--ink); min-width:96px; }
+  .sb-run { font-size:13px; padding:8px 18px; border:none; border-radius:7px; background:var(--accent); color:#fff; cursor:pointer; }
+  .sb-run:active { transform:translateY(1px); }
+  .sb-charts { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:760px){ .sb-charts { grid-template-columns:1fr; } }
+  .sb-panel { border:1px solid var(--line); border-radius:10px; padding:10px; }
+  .sb-panel h4 { font-size:13px; margin:0 0 6px; color:var(--ink); }
+  .sb-stats { display:flex; flex-wrap:wrap; gap:18px; margin-top:12px; }
+  .sb-stat { display:flex; flex-direction:column; }
+  .sb-stat .k { font-size:11px; color:var(--muted); }
+  .sb-stat .v { font-size:16px; font-weight:700; }
+  .pos { color:var(--red); } .neg { color:var(--green); }
+  svg text { font-family:-apple-system,"PingFang SC",sans-serif; }
 </style>
 </head>
 <body>
@@ -50,6 +74,50 @@
 </header>
 
 <div class="wrap">
+  <!-- 纯前端沙盒：合成随机游走行情 + 信号计算 + SVG 绘图，不连任何数据 -->
+  <div class="sandbox">
+    <h2>🧪 在线参数试算（纯前端 · 不连数据）</h2>
+    <div class="sb-sub">用 JS 生成一条随机游走行情，套用下方选中的信号方法并绘制交易点与资金曲线。所有计算都在浏览器本地完成，不请求任何后端 / 不拉取真实行情。</div>
+    <div class="sb-controls">
+      <div class="sb-field">
+        <label>信号方法</label>
+        <select id="sb-method">
+          <option value="dual_ma">双均线交叉</option>
+          <option value="breakout">N 日突破（唐奇安）</option>
+          <option value="bollinger">布林带均值回归</option>
+          <option value="rsi">RSI 超买超卖</option>
+        </select>
+      </div>
+      <div class="sb-field">
+        <label>参数 A（窗/快）</label>
+        <input id="sb-a" type="number" value="5" min="2" max="120" />
+      </div>
+      <div class="sb-field">
+        <label>参数 B（慢/退出/带宽）</label>
+        <input id="sb-b" type="number" value="20" min="2" max="120" />
+      </div>
+      <div class="sb-field">
+        <label>K 线数量</label>
+        <input id="sb-n" type="number" value="240" min="60" max="500" />
+      </div>
+      <div class="sb-field">
+        <label>波动率 %</label>
+        <input id="sb-vol" type="number" value="1.6" step="0.1" min="0.3" max="6" />
+      </div>
+      <div class="sb-field">
+        <label>随机种子</label>
+        <input id="sb-seed" type="number" value="42" min="0" max="9999" />
+      </div>
+      <button class="sb-run" onclick="sbRun()">生成并回测</button>
+      <button class="sb-run" style="background:#eef1f4;color:var(--accent);border:1px solid var(--line)" onclick="sbRun(true)">换一组随机</button>
+    </div>
+    <div class="sb-charts">
+      <div class="sb-panel"><h4>价格 & 买卖点</h4><div id="sb-chart-price"></div></div>
+      <div class="sb-panel"><h4>资金曲线（策略 vs 买入持有）</h4><div id="sb-chart-equity"></div></div>
+    </div>
+    <div class="sb-stats" id="sb-stats"></div>
+  </div>
+
   <div class="toolbar" id="filters"></div>
   <div id="content"></div>
   <div class="note">本页仅为方法参考与代码模板，不构成投资建议。每个方法均有适用边界，实盘请组合使用并配合风控。</div>
@@ -81,14 +149,31 @@ function cardHTML(m) {
     <span class="chip risk">⚠ ${esc(m.risk)}</span>
     <span class="chip file">${esc(m.category)}</span>
     <pre class="code"></pre>
+    <button class="copy-btn" onclick="copyCode(this)">复制代码</button>
   </div>`;
+}
+
+async function copyCode(btn) {
+  const code = btn.parentElement.querySelector("pre.code").textContent || "";
+  try {
+    await navigator.clipboard.writeText(code);
+  } catch (e) {
+    // 非安全上下文 / 旧浏览器回退
+    const ta = document.createElement("textarea");
+    ta.value = code; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (_) {}
+    document.body.removeChild(ta);
+  }
+  const old = btn.textContent;
+  btn.textContent = "已复制 ✓"; btn.classList.add("copied");
+  setTimeout(() => { btn.textContent = old; btn.classList.remove("copied"); }, 1400);
 }
 
 function render() {
   renderFilters();
   const box = document.getElementById("content");
   const list = activeCat === "全部" ? METHODS : METHODS.filter(m => m.category === activeCat);
-  // 按分类分组
   const groups = {};
   list.forEach(m => { (groups[m.category] = groups[m.category] || []).push(m); });
   let html = "";
@@ -98,12 +183,183 @@ function render() {
     html += `</div>`;
   });
   box.innerHTML = html;
-  // 填充代码（用 textContent 避免 HTML 注入）
   const cards = box.querySelectorAll(".card");
   list.forEach((m, i) => { cards[i].querySelector("pre.code").textContent = m.snippet || ""; });
 }
 
+/* ============== 纯前端沙盒 ============== */
+function mulberry32(seed){
+  return function(){
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function genWalk(n, vol, seed){
+  const rnd = mulberry32(seed);
+  const base = 10;
+  const prices = [base];
+  let drift = (rnd() - 0.5) * 0.0008; // 轻微趋势
+  for (let i = 1; i < n; i++){
+    let ret = drift + (rnd() - 0.5) * 2 * (vol/100);
+    ret = Math.max(-0.098, Math.min(0.098, ret)); // 涨跌停感
+    prices.push(prices[i-1] * (1 + ret));
+  }
+  return prices;
+}
+function sma(arr, w){
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++){
+    sum += arr[i];
+    if (i >= w) sum -= arr[i-w];
+    if (i >= w-1) out[i] = sum / w;
+  }
+  return out;
+}
+function std(arr, w){
+  const out = new Array(arr.length).fill(null);
+  for (let i = w-1; i < arr.length; i++){
+    const slice = arr.slice(i-w+1, i+1);
+    const m = slice.reduce((a,b)=>a+b,0)/w;
+    const v = slice.reduce((a,b)=>a+(b-m)*(b-m),0)/w;
+    out[i] = Math.sqrt(v);
+  }
+  return out;
+}
+function rsi(arr, w){
+  const out = new Array(arr.length).fill(50);
+  let avgG = 0, avgL = 0, seeded = false;
+  for (let i = 1; i < arr.length; i++){
+    const ch = arr[i] - arr[i-1];
+    const g = ch > 0 ? ch : 0, l = ch < 0 ? -ch : 0;
+    if (i < w){ avgG += g; avgL += l; if (i === w-1){ avgG/=w; avgL/=w; seeded = true; } continue; }
+    avgG = (avgG*(w-1) + g)/w; avgL = (avgL*(w-1) + l)/w;
+    const rs = avgL === 0 ? 100 : avgG/avgL;
+    out[i] = 100 - 100/(1+rs);
+  }
+  return out;
+}
+// 返回每一根 K 线的目标仓位：1 多 / 0 空仓 / -1 空
+function computePosition(method, prices, a, b){
+  const n = prices.length;
+  const pos = new Array(n).fill(0);
+  if (method === "dual_ma"){
+    const f = sma(prices, a), s = sma(prices, b);
+    for (let i = 0; i < n; i++) if (f[i]!=null && s[i]!=null) pos[i] = f[i] > s[i] ? 1 : 0;
+  } else if (method === "breakout"){
+    for (let i = b; i < n; i++){
+      let hh = -Infinity, ll = Infinity;
+      for (let j = i-b; j < i; j++){ hh = Math.max(hh, prices[j]); ll = Math.min(ll, prices[j]); }
+      if (prices[i] > hh) pos[i] = 1;
+      else if (prices[i] < ll) pos[i] = 0;
+      else pos[i] = pos[i-1]; // 持有直至反向突破
+    }
+  } else if (method === "bollinger"){
+    const m = sma(prices, a), sd = std(prices, a);
+    const mult = b/10; // 把"参数B"当带宽×10，如 b=20→2.0
+    for (let i = a-1; i < n; i++){
+      const up = m[i] + mult*sd[i], lo = m[i] - mult*sd[i];
+      if (prices[i] <= lo) pos[i] = 1;
+      else if (prices[i] >= up) pos[i] = 0;
+      else pos[i] = pos[i-1];
+    }
+  } else if (method === "rsi"){
+    const r = rsi(prices, a); const ob = Math.min(95, 100 - b*2), os = Math.max(5, b*2); // 用 b 控制阈值宽度
+    for (let i = 0; i < n; i++){
+      if (r[i] <= os) pos[i] = 1;
+      else if (r[i] >= ob) pos[i] = 0;
+      else pos[i] = pos[i-1];
+    }
+  }
+  return pos;
+}
+function backtest(prices, pos, cost=0.0008){
+  const n = prices.length;
+  const stratEq = [1], holdEq = [1];
+  let trades = 0;
+  for (let i = 1; i < n; i++){
+    const ret = prices[i]/prices[i-1] - 1;
+    const pPrev = pos[i-1], pCur = pos[i];
+    const turnover = Math.abs(pCur - pPrev);
+    const sRet = pPrev * ret - cost * turnover;
+    stratEq.push(stratEq[i-1] * (1 + sRet));
+    holdEq.push(holdEq[i-1] * (1 + ret));
+    if (pPrev === 0 && pCur === 1) trades++;
+  }
+  // 最大回撤
+  function mdd(eq){ let peak=eq[0], max=0; for (const v of eq){ if (v>peak) peak=v; const d=(peak-v)/peak; if (d>max) max=d; } return max; }
+  return { stratEq, holdEq, trades, stratRet: stratEq[n-1]-1, holdRet: holdEq[n-1]-1, stratMdd: mdd(stratEq) };
+}
+function svgLine(series, W, H, opts={}){
+  const n = series.length;
+  const lo = Math.min(...series), hi = Math.max(...series);
+  const pad = 6;
+  const xs = i => pad + (W-2*pad) * i/(n-1);
+  const ys = v => H-pad - (H-2*pad) * (v-lo)/(hi-lo || 1);
+  let path = "";
+  series.forEach((v,i)=> path += (i? "L":"M") + xs(i).toFixed(1) + " " + ys(v).toFixed(1) + " ");
+  return { xs, ys, lo, hi, path, pad };
+}
+function drawPrice(prices, pos){
+  const W=480, H=240;
+  const g = svgLine(prices, W, H);
+  let markers = "";
+  for (let i = 1; i < pos.length; i++){
+    if (pos[i-1]===0 && pos[i]===1) markers += `<path d="M${g.xs(i).toFixed(1)} ${g.ys(prices[i]).toFixed(1)} l-5 -9 l10 0 z" fill="var(--green)"/>`;
+    if (pos[i-1]===1 && pos[i]===0) markers += `<path d="M${g.xs(i).toFixed(1)} ${g.ys(prices[i]).toFixed(1)} l-5 9 l10 0 z" fill="var(--red)"/>`;
+  }
+  document.getElementById("sb-chart-price").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" style="background:#fbfcfd;border-radius:8px">
+      <path d="${g.path}" fill="none" stroke="var(--accent)" stroke-width="1.6"/>
+      ${markers}
+      <line x1="${g.pad}" y1="${g.ys(prices[0]).toFixed(1)}" x2="${W-g.pad}" y2="${g.ys(prices[0]).toFixed(1)}" stroke="#ccc" stroke-dasharray="3 3"/>
+    </svg>`;
+}
+function drawEquity(strat, hold){
+  const W=480, H=240;
+  const all = strat.concat(hold);
+  const g = svgLine(all, W, H);
+  const s = svgLine(strat, W, H), h = svgLine(hold, W, H);
+  document.getElementById("sb-chart-equity").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%" style="background:#fbfcfd;border-radius:8px">
+      <path d="${h.path}" fill="none" stroke="var(--muted)" stroke-width="1.4" stroke-dasharray="4 3"/>
+      <path d="${s.path}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+    </svg>`;
+}
+function fmtPct(x){ return (x>=0?"+":"") + (x*100).toFixed(2) + "%"; }
+function sbRun(reseed){
+  const method = document.getElementById("sb-method").value;
+  let a = +document.getElementById("sb-a").value;
+  let b = +document.getElementById("sb-b").value;
+  const n = Math.max(60, Math.min(500, +document.getElementById("sb-n").value));
+  const vol = +document.getElementById("sb-vol").value;
+  let seed = +document.getElementById("sb-seed").value;
+  if (reseed) seed = Math.floor(Math.random()*9999);
+  else document.getElementById("sb-seed").value = seed;
+
+  const prices = genWalk(n, vol, seed);
+  const pos = computePosition(method, prices, a, b);
+  const r = backtest(prices, pos);
+
+  drawPrice(prices, pos);
+  drawEquity(r.stratEq, r.holdEq);
+
+  const sCls = r.stratRet >= 0 ? "pos" : "neg";
+  const hCls = r.holdRet >= 0 ? "pos" : "neg";
+  document.getElementById("sb-stats").innerHTML = `
+    <div class="sb-stat"><span class="k">信号方法</span><span class="v" style="font-size:13px">${method}</span></div>
+    <div class="sb-stat"><span class="k">交易次数</span><span class="v">${r.trades}</span></div>
+    <div class="sb-stat"><span class="k">策略收益</span><span class="v ${sCls}">${fmtPct(r.stratRet)}</span></div>
+    <div class="sb-stat"><span class="k">买入持有</span><span class="v ${hCls}">${fmtPct(r.holdRet)}</span></div>
+    <div class="sb-stat"><span class="k">策略最大回撤</span><span class="v">${(r.stratMdd*100).toFixed(2)}%</span></div>
+    <div class="sb-stat"><span class="k">超额收益</span><span class="v ${r.stratRet-r.holdRet>=0?'pos':'neg'}">${fmtPct(r.stratRet-r.holdRet)}</span></div>
+  `;
+}
+
 render();
+sbRun();
 </script>
 </body>
 </html>
