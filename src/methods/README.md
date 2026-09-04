@@ -18,6 +18,9 @@
 | `stat_arb.py` | 统计套利 | 配对交易（协整 z-score）、网格价位 |
 | `position.py` | 仓位管理 | 凯利公式、固定分数、风险平价 |
 | `multi_factor.py` | 多因子 | 横截面 z-score、因子加权合成 |
+| `turtle.py` | 趋势跟踪 | 海龟法则完整版（突破入场+金字塔加仓+2*ATR止损+反向突破退出） |
+| `multi_timeframe.py` | 趋势跟踪 | 多周期均线共振 |
+| `ml_timing.py` | 机器学习 | 机器学习择时（logreg/随机森林，walk-forward；惰性依赖 scikit-learn） |
 
 ## 信号约定
 
