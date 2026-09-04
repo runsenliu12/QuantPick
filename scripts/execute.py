@@ -9,6 +9,8 @@
     python -m scripts.execute paper --demo             # 纸面回放演示（合成行情）
     python -m scripts.execute method --name turtle --demo   # 把方法接到单标的回测（合成数据）
     python -m scripts.execute method --name rsi --params "window=14,oversold=30" --n 300
+    python -m scripts.execute rotate --assets 8 --top-k 2   # 多标的 ETF 动量轮动回测
+    python -m scripts.execute rotate --trend-amp 0          # 无趋势场景，演示轮动失效
 
 注意：所有命令默认只"生成代码/模拟"，绝不连接券商、绝不自动下单。
 """
@@ -25,6 +27,7 @@ from src.config import load_config
 from src.execution import build_target, save_target, load_target, simulate, fetch_prices_demo
 from src.execution import ptrade_adapter, qmt_adapter, joinquant_adapter
 from src.methods.backtest_signal import backtest_method, list_methods
+from src.methods import rotation as _rotation
 
 _ADAPTERS = {"ptrade": ptrade_adapter, "qmt": qmt_adapter, "joinquant": joinquant_adapter}
 
@@ -76,6 +79,16 @@ def main():
     pm.add_argument("--cost", type=float, default=0.0008, help="单边成本（佣金+滑点）")
     pm.add_argument("--no-t1", action="store_true", help="关闭 T+1（信号当日生效）")
     pm.add_argument("--list", action="store_true", help="列出所有支持的方法名")
+
+    pr = sub.add_parser("rotate", help="多标的 ETF 动量轮动回测（合成数据演示，不连券商）")
+    pr.add_argument("--n", type=int, default=750, help="合成交易日数量")
+    pr.add_argument("--assets", type=int, default=8, help="标的池数量")
+    pr.add_argument("--seed", type=int, default=7, help="随机种子")
+    pr.add_argument("--top-k", type=int, default=2, help="持有动量最强的几个标的")
+    pr.add_argument("--lookback", type=int, default=21, help="动量窗口")
+    pr.add_argument("--cost", type=float, default=0.0005, help="单边成本（佣金+滑点）")
+    pr.add_argument("--trend-amp", type=float, default=0.0015,
+                    help="合成行情的趋势强度；设为 0 得到无趋势随机游走（演示轮动失效场景）")
 
     args = p.parse_args()
     if args.cmd == "target":
@@ -133,6 +146,36 @@ def main():
                 print(f"  {k}: {v:.4f}" if abs(v) < 1 else f"  {k}: {v:.2f}")
             else:
                 print(f"  {k}: {v}")
+    elif args.cmd == "rotate":
+        px = _rotation.gen_multi_prices(n=args.n, n_assets=args.assets, seed=args.seed,
+                                        trend_amp=args.trend_amp)
+        print(f"=== ETF 动量轮动回测（合成数据，不连券商） ===")
+        print(f"标的池: {args.assets} 个  交易日: {args.n}  种子: {args.seed}  "
+              f"趋势强度: {args.trend_amp}  成本: {args.cost}")
+        print()
+        rows = []
+        for tk in (1, 2, 3):
+            if tk > args.assets:
+                continue
+            r = _rotation.rotation_backtest(px, lookback=args.lookback, top_k=tk, cost=args.cost)
+            m = r["metrics"]
+            rows.append((f"动量轮动 top{tk}", m, r["total_turnover"], r["num_switches"]))
+        bh = _rotation.buy_and_hold(px)
+        mb = _rotation.compute_nav_metrics(bh)
+        rows.append(("等权买入持有(基准)", mb, 0.0, 0))
+
+        print(f"{'策略':<20}{'总收益':>10}{'年化':>10}{'Sharpe':>9}{'最大回撤':>10}{'换手':>9}{'调仓':>7}")
+        print("-" * 75)
+        for name, m, turn, sw in rows:
+            print(f"{name:<20}{m['total_return']:>10.3f}{m['annual_return']:>10.3f}"
+                  f"{m['sharpe']:>9.3f}{m['max_drawdown']:>10.3f}{turn:>9.1f}{sw:>7}")
+        print()
+        if args.trend_amp == 0:
+            print("提示：trend-amp=0 -> 无趋势随机游走，动量无信号可捕捉，")
+            print("      轮动只贡献换手成本，通常跑输买入持有。这是轮动策略的失效场景。")
+        else:
+            print("提示：合成数据含持续轮动趋势，动量轮动通常占优；")
+            print("      真实市场趋势强弱随环境变化，务必做样本外与多参数稳健性检验。")
     else:
         p.print_help()
 
