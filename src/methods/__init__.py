@@ -10,6 +10,9 @@
   - stat_arb          : 统计套利（配对交易、网格）
   - position          : 仓位管理（凯利、固定分数、风险平价）
   - multi_factor      : 多因子合成
+  - turtle            : 海龟法则完整版（突破+加仓+ATR止损+退出）
+  - multi_timeframe   : 多周期均线共振
+  - ml_timing         : 机器学习择时（惰性依赖 scikit-learn）
 
 所有方法仅依赖 numpy / pandas，无外部网络/IO。调用示例：
 
@@ -17,13 +20,15 @@
     sig = trend.dual_ma_signal(close, fast=5, slow=20)
 """
 from . import (trend, momentum, mean_reversion, volatility,
-               stat_arb, position, multi_factor)
+               stat_arb, position, multi_factor,
+               turtle, multi_timeframe, ml_timing)
 from .base import (to_returns, log_returns, sma, ema, rolling_std, zscore,
                    normalize_weights, signal_to_position)
 
 __all__ = [
     "trend", "momentum", "mean_reversion", "volatility",
     "stat_arb", "position", "multi_factor",
+    "turtle", "multi_timeframe", "ml_timing",
     "to_returns", "log_returns", "sma", "ema", "rolling_std",
     "zscore", "normalize_weights", "signal_to_position",
 ]
